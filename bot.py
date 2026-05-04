@@ -54,11 +54,13 @@ logger = logging.getLogger(__name__)
 # GAME SETTINGS
 # --------------------
 LOCK_SECONDS = 120
+
+# TODO: hook MIN/MAX into refine_keywords once keyword count scaling is added
 MIN_KEYWORDS = 3
 MAX_KEYWORDS = 8
 
-streaks = defaultdict(int)
-chat_difficulty = defaultdict(int)
+streaks = defaultdict(int)          # TODO: wire into scoring multiplier
+chat_difficulty = defaultdict(int)  # TODO: wire into trivia generation
 
 round_end_time = {}
 
@@ -67,12 +69,12 @@ round_end_time = {}
 # ROUND UI BLOCK
 # --------------------
 ROUND_BLOCK = (
-    "🧠 *ROUND ACTIVE*\n\n"
-    "• Guess the missing words\n"
-    "• Typos are allowed\n"
+    "🗂 *ROUND ACTIVE*\n\n"
+    "• Guess the ███ redacted ███ words\n"
+    "• Typos tolerated — the archive is forgiving\n"
     "• Partial names count\n"
     "• First correct match wins points\n"
-    "• Use /reveal to end round\n"
+    "• /reveal unlocks after timer expires\n"
 )
 
 
@@ -84,25 +86,24 @@ async def pin_message(context, chat_id, message_id):
         await context.bot.pin_chat_message(
             chat_id=chat_id,
             message_id=message_id,
-            disable_notification=True
+            disable_notification=True,
         )
     except Exception:
-        pass
+        logger.exception("pin_message failed for chat %s", chat_id)
 
 
 async def unpin_message(context, chat_id):
     try:
         await context.bot.unpin_chat_message(chat_id=chat_id)
     except Exception:
-        pass
+        logger.exception("unpin_message failed for chat %s", chat_id)
 
 
 # --------------------
-# TIMER ENGINE (5s UPDATE)
+# TIMER ENGINE (1s UPDATE)
 # --------------------
 async def start_round_timer(context, chat_id, message_id, duration=120):
-    start_time = time.time()
-    round_end_time[chat_id] = start_time + duration
+    round_end_time[chat_id] = time.time() + duration
 
     try:
         while True:
@@ -112,73 +113,132 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
 
             remaining = int(round_end_time[chat_id] - time.time())
             if remaining <= 0:
+                # Time expired — auto-reveal
+                clear_active_game(chat_id)
+                await unpin_message(context, chat_id)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "⏱ *TIME'S UP — FILE DECLASSIFIED*\n\n"
+                        f"{game['original']}\n\n"
+                        "_No one cracked it. The archive remembers._"
+                    ),
+                    parse_mode="Markdown",
+                )
                 return
 
             mins = remaining // 60
             secs = remaining % 60
-
-            timer_line = f"\n\n⏳ {mins:02d}:{secs:02d}"
+            timer_line = f"\n\n⏳ {mins:02d}:{secs:02d} remaining"
 
             base_text = context.chat_data.get("last_round_text")
             if not base_text:
                 return
 
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=base_text + timer_line,
-                parse_mode="Markdown",
-            )
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=base_text + timer_line,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                # Message may have been deleted or too many edits — not fatal
+                logger.exception("Timer edit failed for chat %s", chat_id)
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
 
-    except Exception:
+    except asyncio.CancelledError:
+        # Clean cancellation from a completed/revealed round — expected
         pass
+    except Exception:
+        logger.exception("start_round_timer crashed for chat %s", chat_id)
 
 
 # --------------------
-# KEYWORD INTELLIGENCE FIX (NEW CORE LOGIC)
+# KEYWORD INTELLIGENCE
 # --------------------
-def refine_keywords(answer, keywords):
+# Stopwords that are never worth redacting
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "is", "was", "are", "were", "be", "been",
+    "it", "its", "this", "that", "these", "those", "not", "no", "so",
+    "as", "if", "then", "than", "also", "just", "he", "she", "they",
+    "his", "her", "their", "we", "our", "you", "your", "i", "my",
+}
+
+# Words that look important but are generic filler in trivia answers
+_GENERIC_FILLER = {
+    "known", "used", "made", "called", "named", "based", "including",
+    "during", "after", "before", "first", "second", "third", "world",
+    "part", "place", "time", "year", "years", "people", "person",
+    "group", "system", "type", "form", "way", "things", "something",
+    "someone", "number", "large", "small", "major", "several", "many",
+}
+
+
+def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
     """
-    Forces:
-    - minimum 2–3 keywords
-    - priority: names / orgs / capitalized terms
-    - fallback: meaningful nouns only
+    From the raw keyword list, extract the words most central to
+    understanding the answer — names, orgs, specific nouns.
+
+    Priority order:
+      1. Multi-word phrases (likely named entities)
+      2. Capitalized single words (proper nouns)
+      3. Long meaningful words (>6 chars, not generic filler)
+      4. Any remaining keyword as fallback
+
+    Returns 2–4 keywords, deduplicated, order-preserved.
     """
+    # Deduplicate while preserving order
+    seen = set()
+    words = []
+    for w in keywords:
+        key = w.lower().strip()
+        if key not in seen and key not in _STOPWORDS:
+            seen.add(key)
+            words.append(w.strip())
 
-    words = list(set(keywords))
+    multi_word   = [w for w in words if len(w.split()) > 1]
+    capitalized  = [w for w in words if w[0].isupper() and len(w.split()) == 1 and w.lower() not in _STOPWORDS]
+    long_words   = [w for w in words if len(w) > 6 and w not in multi_word and w not in capitalized and w.lower() not in _GENERIC_FILLER]
+    fallback     = [w for w in words if w not in multi_word and w not in capitalized and w not in long_words]
 
-    # priority extraction (likely important entities)
-    priority = [
-        w for w in words
-        if any(c.isupper() for c in w) or len(w) > 6
-    ]
+    pool = multi_word + capitalized + long_words + fallback
 
-    # fallback meaningful words
-    fallback = [
-        w for w in words
-        if w not in priority and len(w) > 3
-    ]
-
+    # Aim for 2–4 redactions — enough to be a puzzle, not a blackout
     final = []
-
-    # ensure 2–3 meaningful redactions minimum
-    while len(final) < 2:
-        if priority:
-            final.append(priority.pop(0))
-        elif fallback:
-            final.append(fallback.pop(0))
-        else:
+    for w in pool:
+        if len(final) >= 4:
             break
+        final.append(w)
 
-    # add one more optional if available
-    if priority:
-        final.append(priority[0])
-    elif fallback and len(final) < 3:
-        final.append(fallback[0])
+    # Hard minimum: always redact at least 2 words or the game is trivial
+    while len(final) < 2 and words:
+        candidate = words.pop(0)
+        if candidate not in final:
+            final.append(candidate)
 
-    return list(set(final))
+    return final
+
+
+# --------------------
+# TASK HELPERS
+# --------------------
+def _cancel_timer(context):
+    """Cancel any running timer task for this chat."""
+    task = context.chat_data.pop("timer_task", None)
+    if task and not task.done():
+        task.cancel()
+
+
+def _start_timer(context, chat_id, message_id):
+    """Spawn a timer task and store the reference."""
+    _cancel_timer(context)
+    task = asyncio.create_task(
+        start_round_timer(context, chat_id, message_id, LOCK_SECONDS)
+    )
+    context.chat_data["timer_task"] = task
 
 
 # --------------------
@@ -186,25 +246,19 @@ def refine_keywords(answer, keywords):
 # --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "📁 *PEPSTEIN ARCHIVE SYSTEM ONLINE*\n\n"
-        "🧠 WHAT THIS IS:\n"
-        "You are entering a chaotic trivia reconstruction system where answers are redacted but always contain clues.\n"
-        "Think: internet conspiracy energy meets word puzzle game.\n\n"
-        "🎮 HOW IT WORKS:\n"
-        "• /trivia — starts a timed round (2 minutes)\n"
-        "• /ask — new round based on your own question (2 minutes)\n"
-        "• /reveal — ends the round and shows full answer\n"
-        "• /rules — full breakdown of mechanics\n"
-        "• /score — shows your current streak score\n"
-        "• /leaderboard — top players in the archive\n\n"
-        "⚠️ GAME RULES:\n"
-        "• Minor typos allowed\n"
-        "• Partial names count\n"
-        "• Clues always exist in answers\n"
+        "📁 *PEPSTEIN ARCHIVE — ACCESS GRANTED*\n\n"
+        "You have been connected to a classified trivia reconstruction system.\n"
+        "Critical words have been ███ redacted ███. Your job is to recover them.\n\n"
+        "🎮 *COMMANDS:*\n"
+        "• /trivia — pull a random file from the archive\n"
+        "• /ask [question] — submit your own inquiry\n"
+        "• /reveal — declassify the answer _(timer must expire first)_\n"
+        "• /score — your current standing\n"
+        "• /leaderboard — who's been reading the files\n"
+        "• /rules — full mechanics\n\n"
+        "⚠️ _The archive does not forget. Neither do we._"
     )
-
-    msg = await update.message.reply_text(text, parse_mode="Markdown")
-    context.chat_data["menu_message_id"] = msg.message_id
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # --------------------
@@ -212,21 +266,60 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --------------------
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "📜 *PEPSTEIN ARCHIVE — FULL RULESET*\n\n"
-        "🎯 OBJECTIVE:\n"
-        "Guess the missing words in redacted prompts.\n\n"
-        "🧠 COMMANDS:\n"
-        "• /trivia — random timed round\n"
-        "• /ask — custom round based on your question\n"
-        "• /reveal — ends current round (ONLY after timer ends)\n"
-        "• /score — shows score\n"
-        "• /leaderboard — top players\n\n"
-        "🏆 SCORING:\n"
-        "• +10 per correct word\n"
-        "• streak multipliers apply\n"
+        "📜 *PEPSTEIN ARCHIVE — OPERATIONAL BRIEFING*\n\n"
+        "🎯 *OBJECTIVE:*\n"
+        "Identify the ███ redacted ███ words in each classified file.\n"
+        "The redacted words are always central to the answer — no decoys.\n\n"
+        "🧠 *COMMANDS:*\n"
+        "• /trivia — random classified file\n"
+        "• /ask — submit your own question to the system\n"
+        "• /reveal — unlock the file _(only after 2 min timer expires)_\n"
+        "• /score — your dossier\n"
+        "• /leaderboard — archive rankings\n\n"
+        "🏆 *SCORING:*\n"
+        "• +10 per recovered word\n"
+        "• Streak multipliers apply\n"
+        "• Typos tolerated. Partial names accepted.\n\n"
+        "🔒 *TIMER RULES:*\n"
+        "• Each round locks for 2 minutes\n"
+        "• /reveal is blocked until the timer runs out\n"
+        "• If nobody guesses in time, the archive auto-declassifies\n\n"
+        "⚠️ _All communications are monitored. Guess accordingly._"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+# --------------------
+# SCORE
+# --------------------
+async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    points = get_user_score(user.id)
+    await update.message.reply_text(
+        f"🗂 *DOSSIER: {user.first_name}*\n\n"
+        f"Archive standing: *{points} pts*\n\n"
+        "_The archive keeps score even when you don't._",
+        parse_mode="Markdown",
     )
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+# --------------------
+# LEADERBOARD
+# --------------------
+async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = get_leaderboard()
+    if not rows:
+        await update.message.reply_text("📭 The archive has no records yet.")
+        return
+
+    lines = ["🏛 *PEPSTEIN ARCHIVE — TOP OPERATIVES*\n"]
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (username, pts) in enumerate(rows[:10]):
+        prefix = medals[i] if i < 3 else f"{i+1}."
+        lines.append(f"{prefix} {username} — {pts} pts")
+
+    lines.append("\n_They read the files. Did you?_")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
 # --------------------
@@ -240,16 +333,15 @@ def similarity(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
-def fuzzy_match(guess, keyword):
+def fuzzy_match(guess: str, keyword: str) -> bool:
     guess = normalize(guess)
     keyword = normalize(keyword)
 
     fillers = {"the", "a", "an"}
-
-    guess_tokens = [g for g in guess.split() if g not in fillers]
+    guess_tokens   = [g for g in guess.split()   if g not in fillers]
     keyword_tokens = [k for k in keyword.split() if k not in fillers]
 
-    guess_clean = " ".join(guess_tokens)
+    guess_clean   = " ".join(guess_tokens)
     keyword_clean = " ".join(keyword_tokens)
 
     if keyword_clean in guess_clean or guess_clean in keyword_clean:
@@ -258,18 +350,41 @@ def fuzzy_match(guess, keyword):
     return similarity(guess_clean, keyword_clean) > 0.82
 
 
-def check_guess_flexible(guess, keywords):
+def check_guess_flexible(guess: str, keywords: list[str]) -> list[str]:
     matched = []
-
     for k in keywords:
         parts = k.split()
-
-        if any(fuzzy_match(guess, p) for p in parts):
+        if any(fuzzy_match(guess, p) for p in parts) or fuzzy_match(guess, k):
             matched.append(k)
-        elif fuzzy_match(guess, k):
-            matched.append(k)
-
     return list(set(matched))
+
+
+# --------------------
+# SHARED ROUND LAUNCH
+# --------------------
+async def _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE"):
+    """Shared logic for trivia and ask commands."""
+    chat_id = update.effective_chat.id
+
+    keywords = refine_keywords(answer, keywords)
+    redacted = redact_answer(answer, keywords)
+
+    set_active_game(chat_id, answer, redacted, keywords)
+
+    msg = await update.message.reply_text(
+        f"📄 *{label}*\n\n"
+        f"🧠 {question}\n\n"
+        f"🧾 {redacted}\n\n"
+        f"{ROUND_BLOCK}",
+        parse_mode="Markdown",
+    )
+
+    # Store base text WITHOUT timer suffix — timer appends its own line
+    context.chat_data["last_round_text"] = msg.text
+    context.chat_data["pinned_game_message"] = msg.message_id
+
+    await pin_message(context, chat_id, msg.message_id)
+    _start_timer(context, chat_id, msg.message_id)
 
 
 # --------------------
@@ -280,35 +395,14 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     game = get_active_game(chat_id)
     if game and time.time() - game["asked_at"] < LOCK_SECONDS:
-        await update.message.reply_text("⏳ round active")
+        remaining = int(LOCK_SECONDS - (time.time() - game["asked_at"]))
+        await update.message.reply_text(f"⏳ round active — {remaining}s remaining")
         return
 
-    await update.message.reply_text("🧠 generating trivia...")
+    await update.message.reply_text("🗂 pulling file from the archive...")
 
     question, answer, keywords = generate_trivia()
-
-    keywords = refine_keywords(answer, keywords)
-    redacted = redact_answer(answer, keywords)
-
-    set_active_game(chat_id, answer, redacted, keywords)
-
-    msg = await update.message.reply_text(
-        "📄 *ROUND STARTED*\n\n"
-        f"🧠 {question}\n\n"
-        f"🧾 {redacted}\n\n"
-        f"{ROUND_BLOCK}",
-        parse_mode="Markdown",
-    )
-
-    context.chat_data["last_round_text"] = msg.text
-
-    await pin_message(context, chat_id, msg.message_id)
-
-    context.chat_data["pinned_game_message"] = msg.message_id
-
-    asyncio.create_task(
-        start_round_timer(context, chat_id, msg.message_id, LOCK_SECONDS)
-    )
+    await _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE")
 
 
 # --------------------
@@ -316,38 +410,25 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --------------------
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /ask [question]")
+        await update.message.reply_text(
+            "Usage: `/ask [question]`\n_Submit your inquiry to the archive._",
+            parse_mode="Markdown",
+        )
         return
 
     chat_id = update.effective_chat.id
-    question = " ".join(context.args)
 
-    await update.message.reply_text("🧠 thinking...")
+    game = get_active_game(chat_id)
+    if game and time.time() - game["asked_at"] < LOCK_SECONDS:
+        remaining = int(LOCK_SECONDS - (time.time() - game["asked_at"]))
+        await update.message.reply_text(f"⏳ round active — {remaining}s remaining")
+        return
+
+    question = " ".join(context.args)
+    await update.message.reply_text("🧠 cross-referencing the archive...")
 
     answer, keywords = get_answer(question)
-
-    keywords = refine_keywords(answer, keywords)
-    redacted = redact_answer(answer, keywords)
-
-    set_active_game(chat_id, answer, redacted, keywords)
-
-    msg = await update.message.reply_text(
-        "📄 *CUSTOM ROUND*\n\n"
-        f"🧠 {question}\n\n"
-        f"🧾 {redacted}\n\n"
-        f"{ROUND_BLOCK}",
-        parse_mode="Markdown",
-    )
-
-    context.chat_data["last_round_text"] = msg.text
-
-    await pin_message(context, chat_id, msg.message_id)
-
-    context.chat_data["pinned_game_message"] = msg.message_id
-
-    asyncio.create_task(
-        start_round_timer(context, chat_id, msg.message_id, LOCK_SECONDS)
-    )
+    await _launch_round(update, context, question, answer, keywords, label="CUSTOM INQUIRY")
 
 
 # --------------------
@@ -358,19 +439,26 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     game = get_active_game(chat_id)
 
     if not game:
-        await update.message.reply_text("no active round")
+        await update.message.reply_text("📭 no active round")
         return
 
-    if chat_id in round_end_time and time.time() < round_end_time[chat_id]:
-        remaining = int(round_end_time[chat_id] - time.time())
-        await update.message.reply_text(f"⏳ wait {remaining}s before reveal is allowed")
+    # Use DB asked_at as source of truth — survives restarts
+    elapsed = time.time() - game["asked_at"]
+    if elapsed < LOCK_SECONDS:
+        remaining = int(LOCK_SECONDS - elapsed)
+        await update.message.reply_text(
+            f"🔒 file still locked — {remaining}s remaining\n"
+            "_The archive releases on its own schedule._"
+        )
         return
 
+    _cancel_timer(context)
     clear_active_game(chat_id)
     await unpin_message(context, chat_id)
 
     await update.message.reply_text(
-        f"🔓 ANSWER:\n\n{game['original']}",
+        f"🔓 *FILE DECLASSIFIED*\n\n{game['original']}\n\n"
+        "_Now you know. Act accordingly._",
         parse_mode="Markdown",
     )
 
@@ -379,16 +467,13 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MESSAGE HANDLER
 # --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if not update.message or not update.message.text:
         return
-
     if update.effective_user.is_bot:
         return
 
     chat_id = update.effective_chat.id
     game = get_active_game(chat_id)
-
     if not game:
         return
 
@@ -396,7 +481,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     guess = update.message.text
 
     matched = check_guess_flexible(guess, game["keywords"])
-
     if not matched:
         return
 
@@ -405,24 +489,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     remaining = [k for k in game["keywords"] if k not in matched]
 
-    pinned_id = context.chat_data.get("pinned_game_message")
-
     if remaining:
         new_redacted = redact_answer(game["original"], remaining)
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
+        # Update the pinned message to reflect newly revealed words
+        pinned_id = context.chat_data.get("pinned_game_message")
+        if pinned_id:
+            try:
+                base = (
+                    f"📄 *ROUND IN PROGRESS*\n\n"
+                    f"🧾 {new_redacted}\n\n"
+                    f"{ROUND_BLOCK}"
+                )
+                context.chat_data["last_round_text"] = base
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=pinned_id,
+                    text=base,
+                    parse_mode="Markdown",
+                )
+            except Exception:
+                logger.exception("Failed to update pinned message after partial guess")
+
         await update.message.reply_text(
-            f"✅ {user.first_name} got {', '.join(matched)} (+{points})"
+            f"✅ *{user.first_name}* recovered `{', '.join(matched)}` _(+{points} pts)_\n"
+            f"🔎 {len(remaining)} word(s) still redacted.",
+            parse_mode="Markdown",
         )
 
     else:
+        _cancel_timer(context)
         clear_active_game(chat_id)
-
-        if pinned_id:
-            await unpin_message(context, chat_id)
+        await unpin_message(context, chat_id)
 
         await update.message.reply_text(
-            f"🎉 {user.first_name} completed it!\n\n{game['original']}"
+            f"🎉 *{user.first_name} cracked the file!* _(+{points} pts)_\n\n"
+            f"🔓 {game['original']}\n\n"
+            "_The archive has been compromised._",
+            parse_mode="Markdown",
         )
 
 
@@ -439,10 +544,11 @@ def main():
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ask", ask_command))
     app.add_handler(CommandHandler("reveal", reveal_command))
-
+    app.add_handler(CommandHandler("score", score_command))
+    app.add_handler(CommandHandler("leaderboard", leaderboard_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot running...")
+    logger.info("Pepstein Archive online.")
     app.run_polling()
 
 
