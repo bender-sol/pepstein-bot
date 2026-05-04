@@ -30,18 +30,17 @@ from redactor import get_answer, generate_trivia, redact_answer, check_guess
 # ENV
 # --------------------
 load_dotenv()
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN is missing (set it in Railway Variables)")
+    raise ValueError("TELEGRAM_TOKEN is missing (Railway Variables)")
 
 
 # --------------------
 # LOGGING
 # --------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
@@ -53,11 +52,29 @@ logger = logging.getLogger(__name__)
 LOCK_SECONDS = 120  # 2 minutes
 
 ROUND_INSTRUCTIONS = (
-    "🎮 *Round in progress:*\n"
-    "• Anyone can guess\n"
-    "• First correct answer wins points\n"
-    "• Each correct word = 10 pts\n"
+    "🎮 *How to play:*\n"
+    "• Guess the missing words in chat\n"
+    "• First correct guess earns points\n"
+    "• Each correct word = 10 points\n"
     "• Use /reveal after 2 minutes\n"
+)
+
+FULL_RULES = (
+    "📜 *Rules*\n\n"
+    "🎯 Objective:\n"
+    "Guess the missing words in the redacted prompt.\n\n"
+    "🏆 Scoring:\n"
+    "• Each correct word = 10 points\n"
+    "• First correct guess wins per word\n\n"
+    "⏱ Timing:\n"
+    f"• Each round lasts {LOCK_SECONDS} seconds\n"
+    "• After that, /reveal shows the answer\n\n"
+    "🧠 Commands:\n"
+    "• /trivia — start random round\n"
+    "• /ask [question] — custom round\n"
+    "• /score — your points\n"
+    "• /leaderboard — top players\n"
+    "• /reveal — show answer after timer\n"
 )
 
 
@@ -72,11 +89,7 @@ def escape_md(text: str) -> str:
 
 async def pin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
     try:
-        await context.bot.pin_chat_message(
-            chat_id=chat_id,
-            message_id=message_id,
-            disable_notification=True,
-        )
+        await context.bot.pin_chat_message(chat_id=chat_id, message_id=message_id)
     except Exception as e:
         logger.warning(f"Pin failed: {e}")
 
@@ -88,12 +101,12 @@ async def unpin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         logger.warning(f"Unpin failed: {e}")
 
 
-async def update_game_message(context, chat_id, message_id, new_text):
+async def edit_message(context, chat_id, message_id, text):
     try:
         await context.bot.edit_message_text(
             chat_id=chat_id,
             message_id=message_id,
-            text=new_text,
+            text=text,
             parse_mode="Markdown",
         )
     except Exception as e:
@@ -104,21 +117,25 @@ async def update_game_message(context, chat_id, message_id, new_text):
 # COMMANDS
 # --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     text = (
         "📋 *Welcome to Pepstein's Redacted Game!*\n\n"
-        "🎮 Commands:\n"
-        "• /trivia — start a round\n"
-        "• /ask [question]\n"
-        "• /score\n"
-        "• /leaderboard\n"
-        "• /reveal\n"
+        "A fast-paced trivia guessing game where words are hidden and YOU fill them in.\n\n"
+        "🎮 Quick Start:\n"
+        "• Use /trivia to start a round\n"
+        "• Guess words in chat\n"
+        "• Earn points for correct answers\n\n"
+        "📌 Type /rules for full instructions."
     )
 
     msg = await update.message.reply_text(text, parse_mode="Markdown")
 
     await pin_message(context, update.effective_chat.id, msg.message_id)
-
     context.chat_data["menu_message_id"] = msg.message_id
+
+
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(FULL_RULES, parse_mode="Markdown")
 
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -144,7 +161,6 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await pin_message(context, chat_id, msg.message_id)
-
     context.chat_data["pinned_game_message"] = msg.message_id
 
 
@@ -171,7 +187,6 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await pin_message(context, chat_id, msg.message_id)
-
     context.chat_data["pinned_game_message"] = msg.message_id
 
 
@@ -189,7 +204,6 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clear_active_game(chat_id)
-
     await unpin_message(context, chat_id)
 
     await update.message.reply_text(
@@ -219,6 +233,7 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 # MESSAGE HANDLER
 # --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     if not update.message or not update.message.text:
         return
 
@@ -243,7 +258,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_points(user.id, user.username or user.first_name, points)
 
     remaining = [k for k in game["keywords"] if k not in matched]
-
     pinned_id = context.chat_data.get("pinned_game_message")
 
     if remaining:
@@ -252,24 +266,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
         if pinned_id:
-            await update_game_message(
+            await edit_message(
                 context,
                 chat_id,
                 pinned_id,
-                f"❓ *REDACTED UPDATED*\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
+                f"❓ *REDUCTED UPDATED*\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
             )
 
         await update.message.reply_text(
-            f"✅ {user.first_name} got {', '.join(matched)} (+{points})"
+            f"✅ {user.first_name} got: {', '.join(matched)} (+{points})"
         )
 
     else:
         clear_active_game(chat_id)
-
         await unpin_message(context, chat_id)
 
         if pinned_id:
-            await update_game_message(
+            await edit_message(
                 context,
                 chat_id,
                 pinned_id,
@@ -290,6 +303,7 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ask", ask_command))
     app.add_handler(CommandHandler("reveal", reveal_command))
