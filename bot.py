@@ -53,7 +53,6 @@ logger = logging.getLogger(__name__)
 LOCK_SECONDS = 120
 MIN_KEYWORDS = 3
 
-# streak memory (in-memory per run)
 streaks = defaultdict(int)
 
 ROUND_INSTRUCTIONS = (
@@ -62,7 +61,7 @@ ROUND_INSTRUCTIONS = (
     "• Restore missing words\n"
     "• First correct answer wins points\n"
     "• Streaks = bonus multipliers\n"
-    "• /reveal if chat devolves into confusion"
+    "• This round expires in 2 minutes unless solved\n"
 )
 
 
@@ -87,16 +86,6 @@ def get_multiplier(streak: int) -> float:
     if streak >= 3:
         return 1.5
     return 1.0
-
-
-def adjust_difficulty(keywords, streak):
-    """
-    Scales difficulty slightly:
-    higher streak → more keywords required (up to a cap)
-    """
-    base = len(set(keywords))
-    bonus = min(streak // 3, 3)  # max +3 difficulty
-    return max(MIN_KEYWORDS, base + bonus)
 
 
 async def pin_message(context, chat_id, message_id):
@@ -131,28 +120,49 @@ async def edit_message(context, chat_id, message_id, text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📁 *PEPSTEIN ARCHIVE SYSTEM ONLINE*\n\n"
-        "A chaotic word-reconstruction simulator where reality is optional.\n\n"
-        "🎮 How it works:\n"
-        "• Words get redacted for no reason\n"
-        "• You guess them back\n"
-        "• You gain points + streak bonuses\n\n"
-        "📌 /rules for full breakdown"
+        "A chaotic word-reconstruction game where redactions appear for no reason and your job is to recover them.\n\n"
+        "🎮 COMMANDS:\n"
+        "• /trivia — start a random round (2 min timer)\n"
+        "• /ask [question] — custom round (2 min timer)\n"
+        "• /reveal — reveal answer (after timer or early if allowed)\n"
+        "• /rules — full instructions\n"
+        "• /score — your points\n"
+        "• /leaderboard — top players\n\n"
+        "⚡ Gameplay:\n"
+        "• Guess missing words in chat\n"
+        "• Earn +10 points per correct word\n"
+        "• Streaks increase multipliers\n"
     )
 
     msg = await update.message.reply_text(text, parse_mode="Markdown")
+
     await pin_message(context, update.effective_chat.id, msg.message_id)
     context.chat_data["menu_message_id"] = msg.message_id
 
 
+# --------------------
+# RULES
+# --------------------
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📁 RULES:\n\n"
-        "• Guess missing words\n"
-        "• +10 points per word\n"
-        "• streaks multiply points\n"
-        "• harder rounds scale with performance\n"
-        "• /reveal ends round\n"
+    text = (
+        "📜 *FULL RULES*\n\n"
+        "🎯 Objective:\n"
+        "Guess the missing redacted words in each prompt.\n\n"
+        "⏱ Timers:\n"
+        "• /trivia = 2 minute round\n"
+        "• /ask = 2 minute round\n"
+        "• /reveal = unlocks answer after timer\n\n"
+        "🏆 Scoring:\n"
+        "• +10 points per correct word\n"
+        "• streak multiplier applies (up to 2.5x)\n\n"
+        "🔥 Streaks:\n"
+        "• consecutive correct answers increase multiplier\n"
+        "• missing a round resets streak\n\n"
+        "🧠 Tip:\n"
+        "Answers are often proper nouns, names, or key entities"
     )
+
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 
 # --------------------
@@ -163,15 +173,13 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     game = get_active_game(chat_id)
     if game and time.time() - game["asked_at"] < LOCK_SECONDS:
-        await update.message.reply_text("⏳ round already active")
+        await update.message.reply_text("⏳ Round already active (2 min timer running).")
         return
 
     await update.message.reply_text("🧠 generating chaos...")
 
     question, answer, keywords = generate_trivia()
-
     keywords = list(set(keywords))
-
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
@@ -203,7 +211,6 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     answer, keywords = get_answer(question)
     keywords = list(set(keywords))
-
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
@@ -228,20 +235,20 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     game = get_active_game(chat_id)
 
     if not game:
-        await update.message.reply_text("no active round")
+        await update.message.reply_text("No active round.")
         return
 
     clear_active_game(chat_id)
     await unpin_message(context, chat_id)
 
     await update.message.reply_text(
-        f"🔓 FULL ANSWER:\n\n{game['original']}",
+        f"🔓 *FULL ANSWER:*\n\n{game['original']}",
         parse_mode="Markdown",
     )
 
 
 # --------------------
-# MESSAGE HANDLER (STREAK + SCALING)
+# MESSAGE HANDLER
 # --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -284,25 +291,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
-        await edit_message(
-            context,
-            chat_id,
-            pinned_id,
-            f"📄 UPDATED\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
-        )
+        if pinned_id:
+            await edit_message(
+                context,
+                chat_id,
+                pinned_id,
+                f"📄 UPDATED ROUND\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
+            )
 
         await update.message.reply_text(
-            f"✅ {user.first_name} got {', '.join(matched)} (+{points}) | streak: {streaks[uid]}x"
+            f"✅ {user.first_name} got {', '.join(matched)} (+{points}) | streak {streaks[uid]}x"
         )
 
     else:
         clear_active_game(chat_id)
         await unpin_message(context, chat_id)
-
         streaks[uid] = 0
 
         await update.message.reply_text(
-            f"🎉 {user.first_name} cleared it!\n\n{game['original']}"
+            f"🎉 {user.first_name} cleared the round!\n\n{game['original']}"
         )
 
 
