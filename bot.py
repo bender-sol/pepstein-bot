@@ -3,6 +3,7 @@ import logging
 import time
 import random
 import difflib
+import asyncio
 from collections import defaultdict
 
 from telegram import Update
@@ -43,7 +44,7 @@ if not TELEGRAM_TOKEN:
 # LOGGING
 # --------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
@@ -90,6 +91,46 @@ async def pin_message(context, chat_id, message_id):
 async def unpin_message(context, chat_id):
     try:
         await context.bot.unpin_chat_message(chat_id=chat_id)
+    except Exception:
+        pass
+
+
+# --------------------
+# TIMER ENGINE
+# --------------------
+async def start_round_timer(context, chat_id, message_id, duration=120):
+    start_time = time.time()
+
+    try:
+        while True:
+            game = get_active_game(chat_id)
+            if not game:
+                return
+
+            elapsed = int(time.time() - start_time)
+            remaining = duration - elapsed
+
+            if remaining <= 0:
+                return
+
+            mins = remaining // 60
+            secs = remaining % 60
+
+            timer_line = f"\n\n⏳ {mins:02d}:{secs:02d}"
+
+            base_text = context.chat_data.get("last_round_text")
+            if not base_text:
+                return
+
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=base_text + timer_line,
+                parse_mode="Markdown",
+            )
+
+            await asyncio.sleep(15)
+
     except Exception:
         pass
 
@@ -206,14 +247,20 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         "📄 *ROUND STARTED*\n\n"
-        f"❓ Q:\n{question}\n\n"
-        f"🧾 A:\n{redacted}\n\n"
+        f"🧠 {question}\n\n"
+        f"🧾 {redacted}\n\n"
         f"{ROUND_BLOCK}",
         parse_mode="Markdown",
     )
 
+    context.chat_data["last_round_text"] = msg.text
+
     await pin_message(context, chat_id, msg.message_id)
     context.chat_data["pinned_game_message"] = msg.message_id
+
+    asyncio.create_task(
+        start_round_timer(context, chat_id, msg.message_id, LOCK_SECONDS)
+    )
 
 
 # --------------------
@@ -237,14 +284,20 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         "📄 *CUSTOM ROUND*\n\n"
-        f"❓ Q:\n{question}\n\n"
-        f"🧾 A:\n{redacted}\n\n"
+        f"🧠 {question}\n\n"
+        f"🧾 {redacted}\n\n"
         f"{ROUND_BLOCK}",
         parse_mode="Markdown",
     )
 
+    context.chat_data["last_round_text"] = msg.text
+
     await pin_message(context, chat_id, msg.message_id)
     context.chat_data["pinned_game_message"] = msg.message_id
+
+    asyncio.create_task(
+        start_round_timer(context, chat_id, msg.message_id, LOCK_SECONDS)
+    )
 
 
 # --------------------
