@@ -61,7 +61,7 @@ chat_difficulty = defaultdict(int)
 
 
 # --------------------
-# ROUND UI BLOCK (RESTORED)
+# ROUND UI BLOCK
 # --------------------
 ROUND_BLOCK = (
     "🧠 *ROUND ACTIVE*\n\n"
@@ -74,7 +74,7 @@ ROUND_BLOCK = (
 
 
 # --------------------
-# TELEGRAM HELPERS (PIN RESTORED)
+# TELEGRAM HELPERS
 # --------------------
 async def pin_message(context, chat_id, message_id):
     try:
@@ -100,23 +100,20 @@ async def unpin_message(context, chat_id):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📁 *PEPSTEIN ARCHIVE SYSTEM ONLINE*\n\n"
-        "A meme-driven redaction simulator where words, names, and phrases are partially hidden for you to reconstruct.\n\n"
         "🧠 WHAT THIS IS:\n"
-        "You are entering a chaotic trivia reconstruction system where answers are deliberately redacted, but always contain clues to help you solve them.\n"
+        "You are entering a chaotic trivia reconstruction system where answers are redacted but always contain clues.\n"
         "Think: internet conspiracy energy meets word puzzle game.\n\n"
         "🎮 HOW IT WORKS:\n"
         "• /trivia — starts a timed round (2 minutes)\n"
-        "• /ask — generates a new round based on your own question (2 minutes)\n"
+        "• /ask — new round based on your own question (2 minutes)\n"
         "• /reveal — ends the round and shows full answer\n"
         "• /rules — full breakdown of mechanics\n"
         "• /score — shows your current streak score\n"
         "• /leaderboard — top players in the archive\n\n"
-        "⚠️ GAME RULES IN PRACTICE:\n"
-        "• Minor typos are allowed\n"
-        "• Partial names (first or last) still count\n"
-        "• Every round includes hidden contextual clues\n"
-        "• Difficulty scales over time automatically\n\n"
-        "📌 Type /rules for full technical breakdown."
+        "⚠️ GAME RULES:\n"
+        "• Minor typos allowed\n"
+        "• Partial names count\n"
+        "• Clues always exist in answers\n"
     )
 
     msg = await update.message.reply_text(text, parse_mode="Markdown")
@@ -130,20 +127,16 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📜 *PEPSTEIN ARCHIVE — FULL RULESET*\n\n"
         "🎯 OBJECTIVE:\n"
-        "Guess the missing words in redacted prompts before the timer ends.\n\n"
+        "Guess the missing words in redacted prompts.\n\n"
         "🧠 COMMANDS:\n"
-        "• /trivia — start random timed round (2 min)\n"
-        "• /ask — new round based on your own question (2 min)\n"
+        "• /trivia — random timed round\n"
+        "• /ask — custom round based on your question\n"
         "• /reveal — ends current round\n"
-        "• /score — shows your score\n"
+        "• /score — shows score\n"
         "• /leaderboard — top players\n\n"
         "🏆 SCORING:\n"
-        "• +10 points per correct word\n"
-        "• streaks increase multipliers\n"
-        "• partial name guesses count\n\n"
-        "🧠 MATCHING:\n"
-        "• typos allowed\n"
-        "• filler words ignored\n"
+        "• +10 per correct word\n"
+        "• streak multipliers apply\n"
     )
 
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -193,7 +186,7 @@ def check_guess_flexible(guess, keywords):
 
 
 # --------------------
-# TRIVIA (PINNED + UI RESTORED)
+# TRIVIA
 # --------------------
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -212,9 +205,9 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *ROUND*\n\n"
-        f"{question}\n\n"
-        f"{redacted}\n\n"
+        "📄 *ROUND STARTED*\n\n"
+        f"❓ Q:\n{question}\n\n"
+        f"🧾 A:\n{redacted}\n\n"
         f"{ROUND_BLOCK}",
         parse_mode="Markdown",
     )
@@ -224,7 +217,7 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# ASK (PINNED + UI RESTORED)
+# ASK
 # --------------------
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -243,9 +236,9 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *CUSTOM ROUND*\n\n"
-        f"{question}\n\n"
-        f"{redacted}\n\n"
+        "📄 *CUSTOM ROUND*\n\n"
+        f"❓ Q:\n{question}\n\n"
+        f"🧾 A:\n{redacted}\n\n"
         f"{ROUND_BLOCK}",
         parse_mode="Markdown",
     )
@@ -255,7 +248,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# REVEAL (UNPIN FIXED)
+# REVEAL
 # --------------------
 async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -275,7 +268,7 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# MESSAGE HANDLER (UNCHANGED)
+# MESSAGE HANDLER
 # --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -304,6 +297,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     remaining = [k for k in game["keywords"] if k not in matched]
 
+    pinned_id = context.chat_data.get("pinned_game_message")
+
     if remaining:
         new_redacted = redact_answer(game["original"], remaining)
         set_active_game(chat_id, game["original"], new_redacted, remaining)
@@ -314,7 +309,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         clear_active_game(chat_id)
-        await unpin_message(context, chat_id)
+
+        if pinned_id:
+            await unpin_message(context, chat_id)
 
         await update.message.reply_text(
             f"🎉 {user.first_name} completed it!\n\n{game['original']}"
