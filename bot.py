@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+from collections import defaultdict
 
 from telegram import Update
 from telegram.ext import (
@@ -49,54 +50,63 @@ logger = logging.getLogger(__name__)
 # --------------------
 # GAME SETTINGS
 # --------------------
-LOCK_SECONDS = 120  # 2 minutes
+LOCK_SECONDS = 120
+MIN_KEYWORDS = 3
+
+# streak memory (in-memory per run)
+streaks = defaultdict(int)
 
 ROUND_INSTRUCTIONS = (
-    "🕵️ *FIELD BRIEFING:*\n"
-    "• Decode the redacted intelligence fragment\n"
-    "• First correct reconstruction earns points\n"
-    "• Each recovered term = 10 points\n"
-    "• Use /reveal after 2 minutes if stalled\n"
-)
-
-FULL_RULES = (
-    "📁 *CLASSIFIED RULES DOSSIER*\n\n"
-    "🧠 Premise:\n"
-    "You are analyzing redacted intelligence fragments from a fictional archive of sealed communications, financial networks, and surveillance reports.\n\n"
-    "🎯 Objective:\n"
-    "Reconstruct missing terms hidden in redacted documents.\n\n"
-    "🏆 Scoring:\n"
-    "• Each correct term = 10 points\n"
-    "• First correct match locks the point\n\n"
-    "⏱ Protocol Timing:\n"
-    f"• Each file remains active for {LOCK_SECONDS} seconds\n"
-    "• After timeout, /reveal exposes full file\n\n"
-    "🧾 Commands:\n"
-    "• /trivia — load a random classified file\n"
-    "• /ask [query] — request a custom intelligence prompt\n"
-    "• /score — view your clearance score\n"
-    "• /leaderboard — top analysts\n"
-    "• /reveal — decrypt full document\n"
+    "🧠 *PEPSTEIN ARCHIVE ACTIVE ROUND*\n\n"
+    "• Decode the redacted chaos\n"
+    "• Restore missing words\n"
+    "• First correct answer wins points\n"
+    "• Streaks = bonus multipliers\n"
+    "• /reveal if chat devolves into confusion"
 )
 
 
 # --------------------
 # HELPERS
 # --------------------
+def normalize(text: str) -> str:
+    return text.lower().strip()
+
+
 def escape_md(text: str) -> str:
     for ch in ["_", "*", "[", "]", "`"]:
         text = text.replace(ch, f"\\{ch}")
     return text
 
 
-async def pin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+def get_multiplier(streak: int) -> float:
+    if streak >= 10:
+        return 2.5
+    if streak >= 5:
+        return 2.0
+    if streak >= 3:
+        return 1.5
+    return 1.0
+
+
+def adjust_difficulty(keywords, streak):
+    """
+    Scales difficulty slightly:
+    higher streak → more keywords required (up to a cap)
+    """
+    base = len(set(keywords))
+    bonus = min(streak // 3, 3)  # max +3 difficulty
+    return max(MIN_KEYWORDS, base + bonus)
+
+
+async def pin_message(context, chat_id, message_id):
     try:
         await context.bot.pin_chat_message(chat_id=chat_id, message_id=message_id)
     except Exception as e:
         logger.warning(f"Pin failed: {e}")
 
 
-async def unpin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+async def unpin_message(context, chat_id):
     try:
         await context.bot.unpin_chat_message(chat_id=chat_id)
     except Exception as e:
@@ -111,55 +121,64 @@ async def edit_message(context, chat_id, message_id, text):
             text=text,
             parse_mode="Markdown",
         )
-    except Exception as e:
-        logger.warning(f"Edit failed: {e}")
+    except Exception:
+        pass
 
 
 # --------------------
-# COMMANDS
+# START
 # --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     text = (
-        "📁 *REDAC-TD ARCHIVE ACCESS GRANTED*\n\n"
-        "You are entering a simulated intelligence reconstruction system.\n\n"
-        "Files originate from a fictionalized archive of:\n"
-        "• sealed financial records\n"
-        "• encrypted communications\n"
-        "• institutional reports\n"
-        "• redacted public disclosures\n\n"
-        "🎮 Mission:\n"
-        "Restore missing terms before the document auto-decrypts.\n\n"
-        "📌 Type /rules for full classification briefing."
+        "📁 *PEPSTEIN ARCHIVE SYSTEM ONLINE*\n\n"
+        "A chaotic word-reconstruction simulator where reality is optional.\n\n"
+        "🎮 How it works:\n"
+        "• Words get redacted for no reason\n"
+        "• You guess them back\n"
+        "• You gain points + streak bonuses\n\n"
+        "📌 /rules for full breakdown"
     )
 
     msg = await update.message.reply_text(text, parse_mode="Markdown")
-
     await pin_message(context, update.effective_chat.id, msg.message_id)
     context.chat_data["menu_message_id"] = msg.message_id
 
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(FULL_RULES, parse_mode="Markdown")
+    await update.message.reply_text(
+        "📁 RULES:\n\n"
+        "• Guess missing words\n"
+        "• +10 points per word\n"
+        "• streaks multiply points\n"
+        "• harder rounds scale with performance\n"
+        "• /reveal ends round\n"
+    )
 
 
+# --------------------
+# TRIVIA
+# --------------------
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     game = get_active_game(chat_id)
     if game and time.time() - game["asked_at"] < LOCK_SECONDS:
-        await update.message.reply_text("⏳ File already active.")
+        await update.message.reply_text("⏳ round already active")
         return
 
-    await update.message.reply_text("🧠 Loading classified file...")
+    await update.message.reply_text("🧠 generating chaos...")
 
     question, answer, keywords = generate_trivia()
+
+    keywords = list(set(keywords))
+
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *FILE: {escape_md(question)}*\n\n"
+        f"📄 *ROUND STARTED*\n\n"
+        f"{escape_md(question)}\n\n"
         f"{redacted}\n\n"
         f"{ROUND_INSTRUCTIONS}",
         parse_mode="Markdown",
@@ -169,23 +188,29 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data["pinned_game_message"] = msg.message_id
 
 
+# --------------------
+# ASK
+# --------------------
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /ask [query]")
+        await update.message.reply_text("Usage: /ask [question]")
         return
 
     chat_id = update.effective_chat.id
     question = " ".join(context.args)
 
-    await update.message.reply_text("🧠 Querying archive...")
+    await update.message.reply_text("🧠 thinking...")
 
     answer, keywords = get_answer(question)
+    keywords = list(set(keywords))
+
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *FILE: {escape_md(question)}*\n\n"
+        f"📄 *CUSTOM ROUND*\n\n"
+        f"{escape_md(question)}\n\n"
         f"{redacted}\n\n"
         f"{ROUND_INSTRUCTIONS}",
         parse_mode="Markdown",
@@ -195,47 +220,28 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data["pinned_game_message"] = msg.message_id
 
 
+# --------------------
+# REVEAL
+# --------------------
 async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     game = get_active_game(chat_id)
 
     if not game:
-        await update.message.reply_text("No active file.")
-        return
-
-    if time.time() - game["asked_at"] < LOCK_SECONDS:
-        remaining = int(LOCK_SECONDS - (time.time() - game["asked_at"]))
-        await update.message.reply_text(f"⏳ Decryption in {remaining}s.")
+        await update.message.reply_text("no active round")
         return
 
     clear_active_game(chat_id)
     await unpin_message(context, chat_id)
 
     await update.message.reply_text(
-        f"🔓 *FULL FILE:*\n\n{game['original']}",
+        f"🔓 FULL ANSWER:\n\n{game['original']}",
         parse_mode="Markdown",
     )
 
 
-async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    score = get_user_score(user.id)
-
-    await update.message.reply_text(f"🏅 Clearance Score: {score}")
-
-
-async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = get_leaderboard(10)
-
-    text = "🏆 Analyst Leaderboard\n\n"
-    for i, (name, score) in enumerate(rows, 1):
-        text += f"{i}. {name} — {score}\n"
-
-    await update.message.reply_text(text)
-
-
 # --------------------
-# MESSAGE HANDLER
+# MESSAGE HANDLER (STREAK + SCALING)
 # --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -251,18 +257,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not game:
         return
 
-    guess = update.message.text
-    matched = check_guess(guess, game["keywords"])
+    guess = normalize(update.message.text)
+
+    matched = [k for k in game["keywords"] if normalize(k) in guess]
 
     if not matched:
         return
 
     user = update.effective_user
-    points = len(matched) * 10
+    uid = user.id
 
-    add_points(user.id, user.username or user.first_name, points)
+    streaks[uid] += 1
+    mult = get_multiplier(streaks[uid])
 
-    remaining = [k for k in game["keywords"] if k not in matched]
+    base_points = len(matched) * 10
+    points = int(base_points * mult)
+
+    add_points(uid, user.username or user.first_name, points)
+
+    remaining = [k for k in game["keywords"] if normalize(k) not in [normalize(m) for m in matched]]
+
     pinned_id = context.chat_data.get("pinned_game_message")
 
     if remaining:
@@ -270,32 +284,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
-        if pinned_id:
-            await edit_message(
-                context,
-                chat_id,
-                pinned_id,
-                f"📄 *UPDATED FILE*\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
-            )
+        await edit_message(
+            context,
+            chat_id,
+            pinned_id,
+            f"📄 UPDATED\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
+        )
 
         await update.message.reply_text(
-            f"✅ {user.first_name} recovered: {', '.join(matched)} (+{points})"
+            f"✅ {user.first_name} got {', '.join(matched)} (+{points}) | streak: {streaks[uid]}x"
         )
 
     else:
         clear_active_game(chat_id)
         await unpin_message(context, chat_id)
 
-        if pinned_id:
-            await edit_message(
-                context,
-                chat_id,
-                pinned_id,
-                f"📄 *FILE FULLY DECLASSIFIED*\n\n{game['original']}",
-            )
+        streaks[uid] = 0
 
         await update.message.reply_text(
-            f"🧾 {user.first_name} completed reconstruction.\n\n{game['original']}"
+            f"🎉 {user.first_name} cleared it!\n\n{game['original']}"
         )
 
 
@@ -312,12 +319,10 @@ def main():
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ask", ask_command))
     app.add_handler(CommandHandler("reveal", reveal_command))
-    app.add_handler(CommandHandler("score", score_command))
-    app.add_handler(CommandHandler("leaderboard", leaderboard_command))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Bot running...")
+    logger.info("Pepstein system running...")
     app.run_polling()
 
 
