@@ -1,23 +1,28 @@
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "📁 *THE PEPSTEIN FILES GAME*\n\n"
-        "🧠 WHAT THIS IS:\n"
-        "A document reconstruction game where answers are deliberately redacted to keep people from needing to get suicided. Guess the correct word for points!\n"
-        "Think: internet conspiracy energy meets word puzzle game.\n\n"
-        "🎮 HOW IT WORKS:\n"
-        "• /trivia — starts a timed round (2 minutes)\n"
-        "• /ask — new round based on your own question (2 minutes)\n"
-        "• /reveal — ends the round and shows full answer\n"
-        "• /rules — full breakdown of mechanics\n"
-        "• /score — shows your current streak score\n"
-        "• /leaderboard — top players in the archive\n\n"
-        "⚠️ GAME RULES IN PRACTICE:\n"
-        "• Minor typos are allowed\n"
-        "• Partial names (first or last) still count\n"
-        "• Every round includes hidden contextual clues\n"
-        "• Difficulty scales over time automatically\n\n"
-        "📌 Type /rules for full technical breakdown."
+async def ask_command(update, context):
+    if not context.args:
+        await update.message.reply_text("Usage: /ask [question]")
+        return
+
+    chat_id = update.effective_chat.id
+    question = " ".join(context.args)
+
+    await update.message.reply_text("🧠 thinking...")
+
+    answer, keywords = get_answer(question)
+
+    keywords = scale_keywords(keywords)
+    answer = add_clues(answer, keywords)
+
+    redacted = redact_answer(answer, keywords)
+
+    set_active_game(chat_id, answer, redacted, keywords)
+
+    msg = await update.message.reply_text(
+        f"📄 *NEW ROUND BASED ON YOUR QUESTION*\n\n"
+        f"{escape_md(question)}\n\n"
+        f"{redacted}",
+        parse_mode="Markdown",
     )
 
-    msg = await update.message.reply_text(text, parse_mode="Markdown")
-    context.chat_data["menu_message_id"] = msg.message_id
+    await pin_message(context, chat_id, msg.message_id)
+    context.chat_data["pinned_game_message"] = msg.message_id
