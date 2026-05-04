@@ -41,17 +41,16 @@ if not TELEGRAM_TOKEN:
 # LOGGING
 # --------------------
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - message)s",
     level=logging.INFO,
 )
-
 logger = logging.getLogger(__name__)
 
 
 # --------------------
 # GAME SETTINGS
 # --------------------
-LOCK_SECONDS = 120  # ✅ 2 minutes
+LOCK_SECONDS = 120  # 2 minutes
 
 ROUND_INSTRUCTIONS = (
     "🎮 *Round in progress:*\n"
@@ -89,6 +88,18 @@ async def unpin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
         logger.warning(f"Unpin failed: {e}")
 
 
+async def update_game_message(context, chat_id, message_id, new_text):
+    try:
+        await context.bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=new_text,
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.warning(f"Edit failed: {e}")
+
+
 # --------------------
 # COMMANDS
 # --------------------
@@ -97,7 +108,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 *Welcome to Pepstein's Redacted Game!*\n\n"
         "🎮 Commands:\n"
         "• /trivia — start a round\n"
-        "• /ask [question] — custom question\n"
+        "• /ask [question]\n"
         "• /score\n"
         "• /leaderboard\n"
         "• /reveal\n"
@@ -178,6 +189,7 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clear_active_game(chat_id)
+
     await unpin_message(context, chat_id)
 
     await update.message.reply_text(
@@ -195,10 +207,6 @@ async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = get_leaderboard(10)
-
-    if not rows:
-        await update.message.reply_text("No scores yet.")
-        return
 
     text = "🏆 Leaderboard\n\n"
     for i, (name, score) in enumerate(rows, 1):
@@ -236,15 +244,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     remaining = [k for k in game["keywords"] if k not in matched]
 
+    pinned_id = context.chat_data.get("pinned_game_message")
+
     if remaining:
-        set_active_game(chat_id, game["original"], game["redacted"], remaining)
+        new_redacted = redact_answer(game["original"], remaining)
+
+        set_active_game(chat_id, game["original"], new_redacted, remaining)
+
+        if pinned_id:
+            await update_game_message(
+                context,
+                chat_id,
+                pinned_id,
+                f"❓ *REDACTED UPDATED*\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
+            )
 
         await update.message.reply_text(
             f"✅ {user.first_name} got {', '.join(matched)} (+{points})"
         )
+
     else:
         clear_active_game(chat_id)
+
         await unpin_message(context, chat_id)
+
+        if pinned_id:
+            await update_game_message(
+                context,
+                chat_id,
+                pinned_id,
+                f"🎉 COMPLETED!\n\n{game['original']}",
+            )
 
         await update.message.reply_text(
             f"🎉 {user.first_name} completed it!\n\n{game['original']}"
