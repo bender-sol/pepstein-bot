@@ -60,6 +60,9 @@ MAX_KEYWORDS = 8
 streaks = defaultdict(int)
 chat_difficulty = defaultdict(int)
 
+# tracks timer state per chat
+round_end_time = {}
+
 
 # --------------------
 # ROUND UI BLOCK
@@ -96,10 +99,11 @@ async def unpin_message(context, chat_id):
 
 
 # --------------------
-# TIMER ENGINE
+# TIMER ENGINE (FASTER UPDATES + STATE)
 # --------------------
 async def start_round_timer(context, chat_id, message_id, duration=120):
     start_time = time.time()
+    round_end_time[chat_id] = start_time + duration
 
     try:
         while True:
@@ -107,8 +111,7 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
             if not game:
                 return
 
-            elapsed = int(time.time() - start_time)
-            remaining = duration - elapsed
+            remaining = int(round_end_time[chat_id] - time.time())
 
             if remaining <= 0:
                 return
@@ -129,7 +132,7 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
                 parse_mode="Markdown",
             )
 
-            await asyncio.sleep(15)
+            await asyncio.sleep(5)  # UPDATED: faster timer updates
 
     except Exception:
         pass
@@ -172,7 +175,7 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🧠 COMMANDS:\n"
         "• /trivia — random timed round\n"
         "• /ask — custom round based on your question\n"
-        "• /reveal — ends current round\n"
+        "• /reveal — ends current round (ONLY after timer ends)\n"
         "• /score — shows score\n"
         "• /leaderboard — top players\n\n"
         "🏆 SCORING:\n"
@@ -240,7 +243,6 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 generating trivia...")
 
     question, answer, keywords = generate_trivia()
-
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
@@ -256,6 +258,7 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data["last_round_text"] = msg.text
 
     await pin_message(context, chat_id, msg.message_id)
+
     context.chat_data["pinned_game_message"] = msg.message_id
 
     asyncio.create_task(
@@ -277,7 +280,6 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 thinking...")
 
     answer, keywords = get_answer(question)
-
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
@@ -293,6 +295,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data["last_round_text"] = msg.text
 
     await pin_message(context, chat_id, msg.message_id)
+
     context.chat_data["pinned_game_message"] = msg.message_id
 
     asyncio.create_task(
@@ -301,7 +304,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# REVEAL
+# REVEAL (NOW TIME LOCKED)
 # --------------------
 async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -309,6 +312,12 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not game:
         await update.message.reply_text("no active round")
+        return
+
+    # BLOCK REVEAL UNTIL TIMER EXPIRES
+    if chat_id in round_end_time and time.time() < round_end_time[chat_id]:
+        remaining = int(round_end_time[chat_id] - time.time())
+        await update.message.reply_text(f"⏳ wait {remaining}s before reveal is allowed")
         return
 
     clear_active_game(chat_id)
