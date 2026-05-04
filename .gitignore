@@ -5,3 +5,6 @@ __pycache__/
 .DS_Storevenv/
 .env
 __pycache__/
+venv/
+__pycache__/
+.DS_Store
