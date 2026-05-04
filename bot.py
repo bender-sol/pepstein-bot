@@ -71,7 +71,7 @@ round_end_time = {}
 # --------------------
 ROUND_BLOCK = (
     "🗂 *ROUND ACTIVE*\n\n"
-    "• Guess the ███ redacted ███ words\n"
+    "• Guess the redacted words\n"
     "• Typos tolerated — the archive is forgiving\n"
     "• Partial names count\n"
     "• First correct match wins points\n"
@@ -302,7 +302,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📁 *PEPSTEIN ARCHIVE — ACCESS GRANTED*\n\n"
         "You have been connected to a classified trivia reconstruction system.\n"
-        "Critical words have been ███ redacted ███. Your job is to recover them.\n\n"
+        "Critical words have been redacted. Your job is to recover them.\n\n"
         "🎮 *COMMANDS:*\n"
         "• /trivia — pull a random file from the archive\n"
         "• /ask [question] — submit your own inquiry\n"
@@ -322,7 +322,7 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📜 *PEPSTEIN ARCHIVE — OPERATIONAL BRIEFING*\n\n"
         "🎯 *OBJECTIVE:*\n"
-        "Identify the ███ redacted ███ words in each classified file.\n"
+        "Identify the redacted words in each classified file.\n"
         "The redacted words are always central to the answer — no decoys.\n\n"
         "🧠 *COMMANDS:*\n"
         "• /trivia — random classified file\n"
