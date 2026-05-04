@@ -2,6 +2,7 @@ import os
 import logging
 import time
 import random
+import difflib
 from collections import defaultdict
 
 from telegram import Update
@@ -25,7 +26,7 @@ from database import (
     clear_active_game,
 )
 
-from redactor import get_answer, generate_trivia, redact_answer, check_guess
+from redactor import get_answer, generate_trivia, redact_answer
 
 
 # --------------------
@@ -56,17 +57,8 @@ MIN_KEYWORDS = 3
 MAX_KEYWORDS = 8
 
 streaks = defaultdict(int)
-chat_difficulty = defaultdict(int)  # NEW: per-chat scaling
+chat_difficulty = defaultdict(int)
 
-ROUND_INSTRUCTIONS = (
-    "🧠 *PEPSTEIN ARCHIVE ACTIVE ROUND*\n\n"
-    "• Decode the redacted chaos\n"
-    "• Restore missing words\n"
-    "• First correct answer wins points\n"
-    "• Streaks = bonus multipliers\n"
-    "• Difficulty scales with performance\n"
-    "• /reveal if chat devolves into confusion"
-)
 
 # --------------------
 # HELPERS
@@ -81,48 +73,78 @@ def escape_md(text: str) -> str:
     return text
 
 
-def get_multiplier(streak: int) -> float:
-    if streak >= 10:
-        return 2.5
-    if streak >= 5:
-        return 2.0
-    if streak >= 3:
-        return 1.5
-    return 1.0
+# --------------------
+# FORGIVING MATCH SYSTEM
+# --------------------
+def similarity(a, b):
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def fuzzy_match(guess, keyword):
+    guess = normalize(guess)
+    keyword = normalize(keyword)
+
+    # remove filler words
+    fillers = {"the", "a", "an"}
+    guess_tokens = [g for g in guess.split() if g not in fillers]
+    keyword_tokens = [k for k in keyword.split() if k not in fillers]
+
+    guess_clean = " ".join(guess_tokens)
+    keyword_clean = " ".join(keyword_tokens)
+
+    # exact / partial match
+    if keyword_clean in guess_clean or guess_clean in keyword_clean:
+        return True
+
+    # fuzzy similarity threshold
+    return similarity(guess_clean, keyword_clean) > 0.82
+
+
+def check_guess_flexible(guess, keywords):
+    matched = []
+
+    for k in keywords:
+        parts = k.split()
+
+        # allow partial name matching (Bill Clinton → Bill OR Clinton OR full)
+        if any(fuzzy_match(guess, p) for p in parts):
+            matched.append(k)
+        elif fuzzy_match(guess, k):
+            matched.append(k)
+
+    return list(set(matched))
 
 
 # --------------------
-# NEW: CORE SCALING ENGINE
+# CLUE ENHANCEMENT ENGINE
 # --------------------
-def scale_keywords(keywords, user_streak, chat_level):
+def add_clues(answer, keywords):
+    """
+    Ensures answer is NEVER pure guessing.
+    Adds lightweight contextual hints for names/events.
+    """
+    clues = []
+
+    for k in keywords:
+        if len(k.split()) > 1:  # likely a name
+            clues.append(f"(a well-known figure related to global politics/media/elite institutions)")
+
+    if clues:
+        return answer + "\n\nClue: " + random.choice(clues)
+
+    return answer
+
+
+def scale_keywords(keywords):
     keywords = list(set(keywords))
 
-    # combine user + chat difficulty
-    difficulty_boost = min((user_streak // 2) + chat_level, 5)
+    # ensure minimum gameplay density
+    target = max(MIN_KEYWORDS, min(MAX_KEYWORDS, len(keywords)))
 
-    target = max(
-        MIN_KEYWORDS,
-        min(MAX_KEYWORDS, len(keywords) + difficulty_boost)
-    )
-
-    # expand if too small
     while len(keywords) < target:
         keywords.append(random.choice(keywords))
 
     return keywords[:target]
-
-
-def adjust_chat_difficulty(chat_id, success):
-    # adaptive difficulty per chat
-    if success:
-        chat_difficulty[chat_id] += 1
-    else:
-        chat_difficulty[chat_id] = max(0, chat_difficulty[chat_id] - 1)
-
-
-def is_boss_round(chat_id):
-    # every 7 difficulty levels triggers boss round
-    return chat_difficulty[chat_id] > 0 and chat_difficulty[chat_id] % 7 == 0
 
 
 # --------------------
@@ -131,15 +153,15 @@ def is_boss_round(chat_id):
 async def pin_message(context, chat_id, message_id):
     try:
         await context.bot.pin_chat_message(chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        logger.warning(f"Pin failed: {e}")
+    except Exception:
+        pass
 
 
 async def unpin_message(context, chat_id):
     try:
         await context.bot.unpin_chat_message(chat_id=chat_id)
-    except Exception as e:
-        logger.warning(f"Unpin failed: {e}")
+    except Exception:
+        pass
 
 
 async def edit_message(context, chat_id, message_id, text):
@@ -160,15 +182,17 @@ async def edit_message(context, chat_id, message_id, text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📁 *PEPSTEIN ARCHIVE SYSTEM ONLINE*\n\n"
-        "A meme-driven redaction simulator where nonsense, conspiracies, and chaos collide.\n\n"
+        "A meme-driven redaction simulator where names, events, and phrases are partially hidden.\n\n"
         "🎮 Commands:\n"
-        "• /trivia — start timed round (2 min)\n"
-        "• /ask — custom timed prompt (2 min)\n"
-        "• /reveal — unlock answer after timer\n"
-        "• /rules — full breakdown\n"
-        "• /score — your streak score\n"
-        "• /leaderboard — top agents\n\n"
-        "⚠️ Difficulty scales automatically with performance"
+        "• /trivia — start timed round\n"
+        "• /ask — custom prompt\n"
+        "• /reveal — reveal answer\n"
+        "• /score — your streak\n"
+        "• /leaderboard\n\n"
+        "🧠 Gameplay Notes:\n"
+        "• Minor typos are allowed\n"
+        "• Partial name guesses work\n"
+        "• Every answer includes subtle clues\n"
     )
 
     msg = await update.message.reply_text(text, parse_mode="Markdown")
@@ -177,56 +201,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# RULES
-# --------------------
-async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📁 RULES:\n\n"
-        "• Guess missing words\n"
-        "• +10 points per word\n"
-        "• streak increases multipliers\n"
-        "• chat difficulty increases over time\n"
-        "• boss rounds appear every ~7 levels\n"
-        "• /reveal ends round\n"
-        "• rounds are always timed (2 min)"
-    )
-
-
-# --------------------
 # TRIVIA
 # --------------------
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
 
     game = get_active_game(chat_id)
     if game and time.time() - game["asked_at"] < LOCK_SECONDS:
-        await update.message.reply_text("⏳ round already active")
+        await update.message.reply_text("⏳ round active")
         return
 
-    await update.message.reply_text("🧠 generating chaos...")
+    await update.message.reply_text("🧠 generating...")
 
     question, answer, keywords = generate_trivia()
 
-    keywords = scale_keywords(
-        keywords,
-        streaks[user_id],
-        chat_difficulty[chat_id]
-    )
+    keywords = scale_keywords(keywords)
+    answer = add_clues(answer, keywords)
 
     redacted = redact_answer(answer, keywords)
-
-    # BOSS ROUND MODIFIER
-    if is_boss_round(chat_id):
-        redacted = "☠️ BOSS FILE DETECTED ☠️\n\n" + redacted
 
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *ROUND STARTED*\n\n"
+        f"📄 *ROUND*\n\n"
         f"{escape_md(question)}\n\n"
-        f"{redacted}\n\n"
-        f"{ROUND_INSTRUCTIONS}",
+        f"{redacted}",
         parse_mode="Markdown",
     )
 
@@ -243,32 +242,19 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-
     question = " ".join(context.args)
-
-    await update.message.reply_text("🧠 thinking...")
 
     answer, keywords = get_answer(question)
 
-    keywords = scale_keywords(
-        keywords,
-        streaks[user_id],
-        chat_difficulty[chat_id]
-    )
+    keywords = scale_keywords(keywords)
+    answer = add_clues(answer, keywords)
 
     redacted = redact_answer(answer, keywords)
-
-    if is_boss_round(chat_id):
-        redacted = "☠️ BOSS FILE DETECTED ☠️\n\n" + redacted
 
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *CUSTOM ROUND*\n\n"
-        f"{escape_md(question)}\n\n"
-        f"{redacted}\n\n"
-        f"{ROUND_INSTRUCTIONS}",
+        f"📄 *CUSTOM ROUND*\n\n{redacted}",
         parse_mode="Markdown",
     )
 
@@ -291,7 +277,7 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await unpin_message(context, chat_id)
 
     await update.message.reply_text(
-        f"🔓 FULL ANSWER:\n\n{game['original']}",
+        f"🔓 ANSWER:\n\n{game['original']}",
         parse_mode="Markdown",
     )
 
@@ -314,54 +300,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = update.effective_user
-    uid = user.id
+    guess = update.message.text
 
-    guess = normalize(update.message.text)
-    matched = [k for k in game["keywords"] if normalize(k) in guess]
+    matched = check_guess_flexible(guess, game["keywords"])
 
     if not matched:
-        adjust_chat_difficulty(chat_id, False)
         return
 
-    streaks[uid] += 1
-    mult = get_multiplier(streaks[uid])
+    points = len(matched) * 10
+    add_points(user.id, user.username or user.first_name, points)
 
-    base = len(matched) * 10
-    points = int(base * mult)
-
-    add_points(uid, user.username or user.first_name, points)
-
-    remaining = [k for k in game["keywords"] if normalize(k) not in [normalize(m) for m in matched]]
-
-    pinned_id = context.chat_data.get("pinned_game_message")
-
-    success = len(remaining) < len(game["keywords"])
-    adjust_chat_difficulty(chat_id, success)
+    remaining = [k for k in game["keywords"] if k not in matched]
 
     if remaining:
         new_redacted = redact_answer(game["original"], remaining)
-
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
-        if pinned_id:
-            await edit_message(
-                context,
-                chat_id,
-                pinned_id,
-                f"📄 UPDATED\n\n{new_redacted}\n\n{ROUND_INSTRUCTIONS}",
-            )
-
         await update.message.reply_text(
-            f"✅ {user.first_name} got {', '.join(matched)} (+{points}) | streak {streaks[uid]}"
+            f"✅ {user.first_name} got {', '.join(matched)} (+{points})"
         )
-
     else:
         clear_active_game(chat_id)
-        await unpin_message(context, chat_id)
-        streaks[uid] = 0
 
         await update.message.reply_text(
-            f"🎉 {user.first_name} cleared it!\n\n{game['original']}"
+            f"🎉 {user.first_name} completed it!\n\n{game['original']}"
         )
 
 
@@ -374,7 +336,6 @@ def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("rules", rules))
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ask", ask_command))
     app.add_handler(CommandHandler("reveal", reveal_command))
