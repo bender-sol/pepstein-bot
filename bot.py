@@ -1,11 +1,9 @@
 import os
 import logging
 import time
-import re
 import random
-import difflib
 import asyncio
-from collections import defaultdict
+import difflib
 
 from telegram import Update
 from telegram.error import RetryAfter
@@ -22,8 +20,6 @@ from dotenv import load_dotenv
 from database import (
     init_db,
     add_points,
-    get_leaderboard,
-    get_user_score,
     set_active_game,
     get_active_game,
     clear_active_game,
@@ -36,8 +32,7 @@ from redactor import get_answer, generate_trivia, redact_answer
 # ENV
 # --------------------
 load_dotenv()
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # --------------------
 # LOGGING
@@ -46,7 +41,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --------------------
-# DIFFICULTY CONFIG
+# DIFFICULTY
 # --------------------
 DIFFICULTY = {
     "easy":   {"label": "🟢 EASY",   "points": 5,  "timer": 90},
@@ -55,15 +50,13 @@ DIFFICULTY = {
 }
 
 DEFAULT_DIFFICULTY = "medium"
-
 round_end_time = {}
 
 # --------------------
-# DIFFICULTY WEIGHTING (45 / 35 / 20)
+# WEIGHTED DIFFICULTY
 # --------------------
-def weighted_difficulty(inferred: str) -> str:
+def weighted_difficulty():
     roll = random.random()
-
     if roll < 0.45:
         return "easy"
     elif roll < 0.80:
@@ -71,41 +64,36 @@ def weighted_difficulty(inferred: str) -> str:
     else:
         return "hard"
 
-
 # --------------------
-# ROUND BLOCK
+# UI BLOCK
 # --------------------
-def build_round_block(difficulty):
-    d = DIFFICULTY[difficulty]
+def build_round_block(diff):
+    d = DIFFICULTY[diff]
     return (
-        f"🗂 ROUND ACTIVE — {d['label']}\n\n"
-        f"• Guess redacted words\n"
-        f"• +{d['points']} pts each\n"
-        f"• /reveal unlocks after timer\n"
+        f"🗂 ROUND ACTIVE — {d['label']}\n"
+        f"• +{d['points']} pts per word\n"
+        f"• /reveal unlocks after timer"
     )
 
-
 # --------------------
-# PIN HELPERS
+# PIN
 # --------------------
-async def pin_message(context, chat_id, message_id):
+async def pin(context, chat_id, msg_id):
     try:
-        await context.bot.pin_chat_message(chat_id, message_id, disable_notification=True)
+        await context.bot.pin_chat_message(chat_id, msg_id, disable_notification=True)
     except:
         pass
 
-
-async def unpin_message(context, chat_id):
+async def unpin(context, chat_id):
     try:
         await context.bot.unpin_chat_message(chat_id)
     except:
         pass
 
-
 # --------------------
 # TIMER
 # --------------------
-async def start_round_timer(context, chat_id, message_id, duration):
+async def timer(context, chat_id, msg_id, duration):
     round_end_time[chat_id] = time.time() + duration
 
     while True:
@@ -115,21 +103,19 @@ async def start_round_timer(context, chat_id, message_id, duration):
 
         remaining = int(round_end_time[chat_id] - time.time())
         if remaining <= 0:
-            await context.bot.send_message(chat_id, "⏱ Timer expired — you can now /reveal")
+            await context.bot.send_message(chat_id, "⏱ Timer expired — /reveal unlocked")
             return
 
-        mins = remaining // 60
-        secs = remaining % 60
-
-        base = context.chat_data.get("last_round_text")
+        mins, secs = divmod(remaining, 60)
+        base = context.chat_data.get("base_text")
         if not base:
             return
 
         try:
             await context.bot.edit_message_text(
                 chat_id=chat_id,
-                message_id=message_id,
-                text=base + f"\n\n⏳ {mins:02d}:{secs:02d}",
+                message_id=msg_id,
+                text=f"{base}\n\n⏳ {mins:02d}:{secs:02d}",
                 parse_mode="Markdown",
             )
         except RetryAfter as e:
@@ -139,63 +125,71 @@ async def start_round_timer(context, chat_id, message_id, duration):
 
         await asyncio.sleep(1)
 
+# --------------------
+# START
+# --------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📁 *PEPSTEIN ARCHIVE*\n\n"
+        "Recover redacted answers.\n\n"
+        "Commands:\n"
+        "/trivia\n"
+        "/ask [question]\n"
+        "/reveal",
+        parse_mode="Markdown"
+    )
 
 # --------------------
 # ROUND LAUNCH
 # --------------------
-async def _launch_round(update, context, question, answer, keywords, label):
+async def launch(update, context, question, answer, keywords, label):
     chat_id = update.effective_chat.id
 
     redacted = redact_answer(answer, keywords)
-
-    inferred = "medium"
-    difficulty = weighted_difficulty(inferred)
-
+    difficulty = weighted_difficulty()
     d = DIFFICULTY[difficulty]
 
     set_active_game(chat_id, answer, redacted, keywords)
 
     context.chat_data["difficulty"] = difficulty
-    context.chat_data["current_question"] = question
+    context.chat_data["question"] = question
 
-    msg = await update.message.reply_text(
+    base = (
         f"📄 *{label} — {d['label']}*\n\n"
         f"🧠 {question}\n\n"
         f"🧾 {redacted}\n\n"
-        f"{build_round_block(difficulty)}",
-        parse_mode="Markdown",
+        f"{build_round_block(difficulty)}"
     )
 
-    context.chat_data["last_round_text"] = msg.text
-    context.chat_data["pinned_game_message"] = msg.message_id
+    msg = await update.message.reply_text(base, parse_mode="Markdown")
 
-    await pin_message(context, chat_id, msg.message_id)
+    context.chat_data["base_text"] = base
+    context.chat_data["msg_id"] = msg.message_id
 
-    asyncio.create_task(start_round_timer(context, chat_id, msg.message_id, d["timer"]))
+    await pin(context, chat_id, msg.message_id)
 
+    asyncio.create_task(timer(context, chat_id, msg.message_id, d["timer"]))
 
 # --------------------
 # COMMANDS
 # --------------------
-async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def trivia(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q, a, k = generate_trivia()
-    await _launch_round(update, context, q, a, k, "CLASSIFIED FILE")
+    await launch(update, context, q, a, k, "CLASSIFIED FILE")
 
-
-async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def ask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("Usage: /ask question")
 
     q = " ".join(context.args)
     a, k = get_answer(q)
 
-    await _launch_round(update, context, q, a, k, "CUSTOM FILE")
-
+    await launch(update, context, q, a, k, "CUSTOM FILE")
 
 # --------------------
 # REVEAL
 # --------------------
-async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def reveal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     game = get_active_game(chat_id)
 
@@ -206,15 +200,14 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("⏳ wait for timer")
 
     clear_active_game(chat_id)
-    await unpin_message(context, chat_id)
+    await unpin(context, chat_id)
 
     await update.message.reply_text(f"🔓 {game['original']}")
 
-
 # --------------------
-# MESSAGE HANDLER
+# GUESS HANDLER
 # --------------------
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
@@ -223,15 +216,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not game:
         return
 
-    guess = update.message.text
+    guess = update.message.text.lower()
     user = update.effective_user
 
-    matched = [k for k in game["keywords"] if k.lower() in guess.lower()]
+    matched = [k for k in game["keywords"] if k.lower() in guess]
     if not matched:
         return
 
-    difficulty = context.chat_data.get("difficulty", DEFAULT_DIFFICULTY)
-    pts = DIFFICULTY[difficulty]["points"]
+    diff = context.chat_data.get("difficulty", DEFAULT_DIFFICULTY)
+    pts = DIFFICULTY[diff]["points"]
 
     add_points(user.id, user.first_name, len(matched) * pts)
 
@@ -241,31 +234,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_redacted = redact_answer(game["original"], remaining)
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
-        question = context.chat_data.get("current_question", "")
-        d = DIFFICULTY[difficulty]
+        question = context.chat_data["question"]
+        d = DIFFICULTY[diff]
 
         base = (
             f"📄 *ROUND IN PROGRESS — {d['label']}*\n\n"
             f"🧠 {question}\n\n"
             f"🧾 {new_redacted}\n\n"
-            f"{build_round_block(difficulty)}"
+            f"{build_round_block(diff)}"
         )
 
-        context.chat_data["last_round_text"] = base
+        context.chat_data["base_text"] = base
 
         await context.bot.edit_message_text(
             chat_id=chat_id,
-            message_id=context.chat_data["pinned_game_message"],
+            message_id=context.chat_data["msg_id"],
             text=base,
             parse_mode="Markdown",
         )
 
     else:
         clear_active_game(chat_id)
-        await unpin_message(context, chat_id)
+        await unpin(context, chat_id)
 
-        await update.message.reply_text(f"🎉 {user.first_name} solved it!\n\n{game['original']}")
-
+        await update.message.reply_text(
+            f"🎉 {user.first_name} solved it!\n\n{game['original']}"
+        )
 
 # --------------------
 # MAIN
@@ -273,15 +267,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     init_db()
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("trivia", trivia_command))
-    app.add_handler(CommandHandler("ask", ask_command))
-    app.add_handler(CommandHandler("reveal", reveal_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("trivia", trivia))
+    app.add_handler(CommandHandler("ask", ask))
+    app.add_handler(CommandHandler("reveal", reveal))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
