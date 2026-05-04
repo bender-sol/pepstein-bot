@@ -75,7 +75,8 @@ ROUND_BLOCK = (
     "• Typos tolerated — the archive is forgiving\n"
     "• Partial names count\n"
     "• First correct match wins points\n"
-    "• /reveal unlocks after timer expires\n"
+    "• Round continues until all words are found\n"
+    "• /reveal and new rounds unlock after timer expires\n"
 )
 
 
@@ -114,15 +115,13 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
 
             remaining = int(round_end_time[chat_id] - time.time())
             if remaining <= 0:
-                # Time expired — auto-reveal
-                clear_active_game(chat_id)
-                await unpin_message(context, chat_id)
+                # Timer expired — notify but keep the round alive.
+                # /reveal and new rounds are now unlocked.
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        "⏱ *TIME'S UP — FILE DECLASSIFIED*\n\n"
-                        f"{game['original']}\n\n"
-                        "_No one cracked it. The archive remembers._"
+                        "⏱ *TIMER EXPIRED — FILE STILL ACTIVE*\n\n"
+                        "_The round continues. Keep guessing, or use /reveal to declassify._"
                     ),
                     parse_mode="Markdown",
                 )
