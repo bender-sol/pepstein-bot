@@ -61,6 +61,40 @@ chat_difficulty = defaultdict(int)
 
 
 # --------------------
+# ROUND UI BLOCK (RESTORED)
+# --------------------
+ROUND_BLOCK = (
+    "🧠 *ROUND ACTIVE*\n\n"
+    "• Guess the missing words\n"
+    "• Typos are allowed\n"
+    "• Partial names count\n"
+    "• First correct match wins points\n"
+    "• Use /reveal to end round\n"
+)
+
+
+# --------------------
+# TELEGRAM HELPERS (PIN RESTORED)
+# --------------------
+async def pin_message(context, chat_id, message_id):
+    try:
+        await context.bot.pin_chat_message(
+            chat_id=chat_id,
+            message_id=message_id,
+            disable_notification=True
+        )
+    except Exception:
+        pass
+
+
+async def unpin_message(context, chat_id):
+    try:
+        await context.bot.unpin_chat_message(chat_id=chat_id)
+    except Exception:
+        pass
+
+
+# --------------------
 # START
 # --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,7 +193,7 @@ def check_guess_flexible(guess, keywords):
 
 
 # --------------------
-# TRIVIA
+# TRIVIA (PINNED + UI RESTORED)
 # --------------------
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -178,15 +212,19 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *ROUND*\n\n{question}\n\n{redacted}",
+        f"📄 *ROUND*\n\n"
+        f"{question}\n\n"
+        f"{redacted}\n\n"
+        f"{ROUND_BLOCK}",
         parse_mode="Markdown",
     )
 
+    await pin_message(context, chat_id, msg.message_id)
     context.chat_data["pinned_game_message"] = msg.message_id
 
 
 # --------------------
-# ASK
+# ASK (PINNED + UI RESTORED)
 # --------------------
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -205,15 +243,19 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"📄 *CUSTOM ROUND*\n\n{question}\n\n{redacted}",
+        f"📄 *CUSTOM ROUND*\n\n"
+        f"{question}\n\n"
+        f"{redacted}\n\n"
+        f"{ROUND_BLOCK}",
         parse_mode="Markdown",
     )
 
+    await pin_message(context, chat_id, msg.message_id)
     context.chat_data["pinned_game_message"] = msg.message_id
 
 
 # --------------------
-# REVEAL
+# REVEAL (UNPIN FIXED)
 # --------------------
 async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -224,6 +266,7 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     clear_active_game(chat_id)
+    await unpin_message(context, chat_id)
 
     await update.message.reply_text(
         f"🔓 ANSWER:\n\n{game['original']}",
@@ -232,7 +275,7 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# MESSAGE HANDLER
+# MESSAGE HANDLER (UNCHANGED)
 # --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -271,6 +314,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         clear_active_game(chat_id)
+        await unpin_message(context, chat_id)
 
         await update.message.reply_text(
             f"🎉 {user.first_name} completed it!\n\n{game['original']}"
