@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -31,12 +32,9 @@ from redactor import get_answer, generate_trivia, redact_answer, check_guess
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN is missing (set it in Railway Variables)")
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY is missing (set it in Railway Variables)")
 
 
 # --------------------
@@ -46,19 +44,21 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
+
 logger = logging.getLogger(__name__)
 
 
 # --------------------
-# CONSTANTS
+# GAME SETTINGS
 # --------------------
-LOCK_SECONDS = 120  # ✅ 2 minutes (UPDATED)
+LOCK_SECONDS = 120  # ✅ 2 minutes
 
 ROUND_INSTRUCTIONS = (
     "🎮 *Round in progress:*\n"
     "• Anyone can guess\n"
     "• First correct answer wins points\n"
-    "• /reveal after 2 minutes\n"   # ✅ UPDATED TEXT
+    "• Each correct word = 10 pts\n"
+    "• Use /reveal after 2 minutes\n"
 )
 
 
@@ -71,7 +71,7 @@ def escape_md(text: str) -> str:
     return text
 
 
-async def pin_round_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+async def pin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
     try:
         await context.bot.pin_chat_message(
             chat_id=chat_id,
@@ -82,7 +82,7 @@ async def pin_round_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, me
         logger.warning(f"Pin failed: {e}")
 
 
-async def unpin_round_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+async def unpin_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     try:
         await context.bot.unpin_chat_message(chat_id=chat_id)
     except Exception as e:
@@ -93,33 +93,30 @@ async def unpin_round_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 # COMMANDS
 # --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     text = (
         "📋 *Welcome to Pepstein's Redacted Game!*\n\n"
         "🎮 Commands:\n"
-        "• /trivia — random question\n"
-        "• /ask — custom question\n"
-        "• /score — your score\n"
+        "• /trivia — start a round\n"
+        "• /ask [question] — custom question\n"
+        "• /score\n"
         "• /leaderboard\n"
         "• /reveal\n"
     )
 
     msg = await update.message.reply_text(text, parse_mode="Markdown")
 
-    await pin_round_message(context, update.effective_chat.id, msg.message_id)
+    await pin_message(context, update.effective_chat.id, msg.message_id)
 
-    context.chat_data["pinned_message_id"] = msg.message_id
+    context.chat_data["menu_message_id"] = msg.message_id
 
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     game = get_active_game(chat_id)
-    if game:
-        elapsed = time.time() - game["asked_at"]
-        if elapsed < LOCK_SECONDS:
-            await update.message.reply_text("Round already active.")
-            return
+    if game and time.time() - game["asked_at"] < LOCK_SECONDS:
+        await update.message.reply_text("⏳ A round is already active.")
+        return
 
     await update.message.reply_text("🧠 Generating trivia...")
 
@@ -129,13 +126,15 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"❓ {escape_md(question)}\n\n{redacted}\n\n{ROUND_INSTRUCTIONS}",
+        f"❓ *{escape_md(question)}*\n\n"
+        f"{redacted}\n\n"
+        f"{ROUND_INSTRUCTIONS}",
         parse_mode="Markdown",
     )
 
-    await pin_round_message(context, chat_id, msg.message_id)
+    await pin_message(context, chat_id, msg.message_id)
 
-    context.chat_data["pinned_message_id"] = msg.message_id
+    context.chat_data["pinned_game_message"] = msg.message_id
 
 
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -154,11 +153,15 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_active_game(chat_id, answer, redacted, keywords)
 
     msg = await update.message.reply_text(
-        f"❓ {escape_md(question)}\n\n{redacted}\n\n{ROUND_INSTRUCTIONS}",
+        f"❓ *{escape_md(question)}*\n\n"
+        f"{redacted}\n\n"
+        f"{ROUND_INSTRUCTIONS}",
         parse_mode="Markdown",
     )
 
-    await pin_round_message(context, chat_id, msg.message_id)
+    await pin_message(context, chat_id, msg.message_id)
+
+    context.chat_data["pinned_game_message"] = msg.message_id
 
 
 async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -169,18 +172,17 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No active round.")
         return
 
-    elapsed = time.time() - game["asked_at"]
-    if elapsed < LOCK_SECONDS:
-        remaining = int(LOCK_SECONDS - elapsed)
-        await update.message.reply_text(f"Wait {remaining}s more.")
+    if time.time() - game["asked_at"] < LOCK_SECONDS:
+        remaining = int(LOCK_SECONDS - (time.time() - game["asked_at"]))
+        await update.message.reply_text(f"⏳ Wait {remaining}s more.")
         return
 
     clear_active_game(chat_id)
-
-    await unpin_round_message(context, chat_id)
+    await unpin_message(context, chat_id)
 
     await update.message.reply_text(
-        f"🔓 Answer:\n\n{game['original']}"
+        f"🔓 *Answer:*\n\n{game['original']}",
+        parse_mode="Markdown",
     )
 
 
@@ -194,6 +196,10 @@ async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = get_leaderboard(10)
 
+    if not rows:
+        await update.message.reply_text("No scores yet.")
+        return
+
     text = "🏆 Leaderboard\n\n"
     for i, (name, score) in enumerate(rows, 1):
         text += f"{i}. {name} — {score}\n"
@@ -201,8 +207,14 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(text)
 
 
+# --------------------
+# MESSAGE HANDLER
+# --------------------
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
+        return
+
+    if update.effective_user.is_bot:
         return
 
     chat_id = update.effective_chat.id
@@ -232,7 +244,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     else:
         clear_active_game(chat_id)
-        await unpin_round_message(context, chat_id)
+        await unpin_message(context, chat_id)
 
         await update.message.reply_text(
             f"🎉 {user.first_name} completed it!\n\n{game['original']}"
