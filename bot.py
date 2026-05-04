@@ -7,6 +7,7 @@ import asyncio
 from collections import defaultdict
 
 from telegram import Update
+from telegram.error import RetryAfter
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -142,6 +143,9 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
                     text=base_text + timer_line,
                     parse_mode="Markdown",
                 )
+            except RetryAfter as e:
+                # Telegram is rate-limiting us — back off as instructed, then resume
+                await asyncio.sleep(e.retry_after)
             except Exception:
                 # Message may have been deleted or too many edits — not fatal
                 logger.exception("Timer edit failed for chat %s", chat_id)
@@ -158,66 +162,117 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
 # --------------------
 # KEYWORD INTELLIGENCE
 # --------------------
-# Stopwords that are never worth redacting
+
+# Never redact these — pure grammar/function words
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "is", "was", "are", "were", "be", "been",
     "it", "its", "this", "that", "these", "those", "not", "no", "so",
     "as", "if", "then", "than", "also", "just", "he", "she", "they",
     "his", "her", "their", "we", "our", "you", "your", "i", "my",
+    "have", "has", "had", "do", "did", "does", "will", "would", "could",
+    "should", "may", "might", "can", "one", "two", "more", "most",
 }
 
-# Words that look important but are generic filler in trivia answers
+# Looks meaningful but adds nothing to the puzzle — don't redact
 _GENERIC_FILLER = {
     "known", "used", "made", "called", "named", "based", "including",
-    "during", "after", "before", "first", "second", "third", "world",
-    "part", "place", "time", "year", "years", "people", "person",
-    "group", "system", "type", "form", "way", "things", "something",
-    "someone", "number", "large", "small", "major", "several", "many",
+    "during", "after", "before", "part", "place", "time", "way",
+    "things", "something", "someone", "large", "small", "major",
+    "several", "many", "became", "became", "while", "within", "across",
+    "between", "around", "through", "about", "other", "another",
+    "however", "therefore", "although", "because", "since", "when",
+    "where", "which", "who", "what", "how", "often", "later", "early",
+    "new", "old", "long", "high", "low", "good", "well", "back",
 }
+
+import re as _re
+
+
+def _extract_numbers(answer: str) -> list[str]:
+    """Pull standalone numbers and years — always high-value redactions."""
+    return _re.findall(r'\b\d{4}\b|\b\d+(?:\.\d+)?(?:%|million|billion|thousand)?\b', answer)
 
 
 def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
     """
-    From the raw keyword list, extract the words most central to
-    understanding the answer — names, orgs, specific nouns.
+    Extract the words most central to answering the question:
+    names, organisations, specific numbers, key proper nouns.
 
     Priority order:
-      1. Multi-word phrases (likely named entities)
-      2. Capitalized single words (proper nouns)
-      3. Long meaningful words (>6 chars, not generic filler)
-      4. Any remaining keyword as fallback
+      1. Numbers / years found directly in the answer text
+      2. Multi-word phrases (named entities — most valuable)
+      3. Capitalized single words (proper nouns)
+      4. Long specific words (>6 chars, not generic filler)
+      5. Any remaining keyword as last resort
 
-    Returns 2–4 keywords, deduplicated, order-preserved.
+    Target: 3–4 redactions minimum. Never fewer than 3.
     """
-    # Deduplicate while preserving order
+    # Deduplicate while preserving order, drop pure stopwords
     seen = set()
     words = []
     for w in keywords:
         key = w.lower().strip()
-        if key not in seen and key not in _STOPWORDS:
+        if key and key not in seen and key not in _STOPWORDS:
             seen.add(key)
             words.append(w.strip())
 
-    multi_word   = [w for w in words if len(w.split()) > 1]
-    capitalized  = [w for w in words if w[0].isupper() and len(w.split()) == 1 and w.lower() not in _STOPWORDS]
-    long_words   = [w for w in words if len(w) > 6 and w not in multi_word and w not in capitalized and w.lower() not in _GENERIC_FILLER]
-    fallback     = [w for w in words if w not in multi_word and w not in capitalized and w not in long_words]
+    # Tier 1 — numbers and years pulled directly from the answer
+    numbers = _extract_numbers(answer)
+    tier1 = [n for n in numbers if n not in seen]
 
-    pool = multi_word + capitalized + long_words + fallback
+    # Tier 2 — multi-word phrases (e.g. "Jeffrey Epstein", "Black Sea")
+    tier2 = [w for w in words if len(w.split()) > 1]
 
-    # Aim for 2–4 redactions — enough to be a puzzle, not a blackout
+    # Tier 3 — capitalized single words (proper nouns)
+    tier3 = [
+        w for w in words
+        if w[0].isupper()
+        and len(w.split()) == 1
+        and w not in tier2
+        and w.lower() not in _STOPWORDS
+    ]
+
+    # Tier 4 — long specific words not already captured
+    captured = set(tier2 + tier3)
+    tier4 = [
+        w for w in words
+        if w not in captured
+        and len(w) > 6
+        and w.lower() not in _GENERIC_FILLER
+    ]
+
+    # Tier 5 — anything left as absolute fallback
+    captured.update(tier4)
+    tier5 = [w for w in words if w not in captured]
+
+    pool = tier1 + tier2 + tier3 + tier4 + tier5
+
+    # Take up to 5, but enforce a minimum of 3
     final = []
     for w in pool:
-        if len(final) >= 4:
+        if len(final) >= 5:
             break
-        final.append(w)
+        if w not in final:
+            final.append(w)
 
-    # Hard minimum: always redact at least 2 words or the game is trivial
-    while len(final) < 2 and words:
-        candidate = words.pop(0)
-        if candidate not in final:
-            final.append(candidate)
+    # If we still don't have 3, mine words directly from the answer text
+    # as a safety net (catches cases where keyword list was sparse)
+    if len(final) < 3:
+        answer_words = [
+            w.strip(".,;:()[]\"'") for w in answer.split()
+        ]
+        for w in answer_words:
+            if len(final) >= 3:
+                break
+            key = w.lower()
+            if (
+                w not in final
+                and key not in _STOPWORDS
+                and key not in _GENERIC_FILLER
+                and len(w) > 3
+            ):
+                final.append(w)
 
     return final
 
