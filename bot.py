@@ -60,7 +60,6 @@ MAX_KEYWORDS = 8
 streaks = defaultdict(int)
 chat_difficulty = defaultdict(int)
 
-# tracks timer state per chat
 round_end_time = {}
 
 
@@ -78,7 +77,7 @@ ROUND_BLOCK = (
 
 
 # --------------------
-# TELEGRAM HELPERS
+# PIN HELPERS
 # --------------------
 async def pin_message(context, chat_id, message_id):
     try:
@@ -99,7 +98,7 @@ async def unpin_message(context, chat_id):
 
 
 # --------------------
-# TIMER ENGINE (FASTER UPDATES + STATE)
+# TIMER ENGINE (5s UPDATE)
 # --------------------
 async def start_round_timer(context, chat_id, message_id, duration=120):
     start_time = time.time()
@@ -112,7 +111,6 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
                 return
 
             remaining = int(round_end_time[chat_id] - time.time())
-
             if remaining <= 0:
                 return
 
@@ -132,10 +130,55 @@ async def start_round_timer(context, chat_id, message_id, duration=120):
                 parse_mode="Markdown",
             )
 
-            await asyncio.sleep(5)  # UPDATED: faster timer updates
+            await asyncio.sleep(5)
 
     except Exception:
         pass
+
+
+# --------------------
+# KEYWORD INTELLIGENCE FIX (NEW CORE LOGIC)
+# --------------------
+def refine_keywords(answer, keywords):
+    """
+    Forces:
+    - minimum 2–3 keywords
+    - priority: names / orgs / capitalized terms
+    - fallback: meaningful nouns only
+    """
+
+    words = list(set(keywords))
+
+    # priority extraction (likely important entities)
+    priority = [
+        w for w in words
+        if any(c.isupper() for c in w) or len(w) > 6
+    ]
+
+    # fallback meaningful words
+    fallback = [
+        w for w in words
+        if w not in priority and len(w) > 3
+    ]
+
+    final = []
+
+    # ensure 2–3 meaningful redactions minimum
+    while len(final) < 2:
+        if priority:
+            final.append(priority.pop(0))
+        elif fallback:
+            final.append(fallback.pop(0))
+        else:
+            break
+
+    # add one more optional if available
+    if priority:
+        final.append(priority[0])
+    elif fallback and len(final) < 3:
+        final.append(fallback[0])
+
+    return list(set(final))
 
 
 # --------------------
@@ -243,6 +286,8 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 generating trivia...")
 
     question, answer, keywords = generate_trivia()
+
+    keywords = refine_keywords(answer, keywords)
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
@@ -280,6 +325,8 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 thinking...")
 
     answer, keywords = get_answer(question)
+
+    keywords = refine_keywords(answer, keywords)
     redacted = redact_answer(answer, keywords)
 
     set_active_game(chat_id, answer, redacted, keywords)
@@ -304,7 +351,7 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # --------------------
-# REVEAL (NOW TIME LOCKED)
+# REVEAL
 # --------------------
 async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -314,7 +361,6 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("no active round")
         return
 
-    # BLOCK REVEAL UNTIL TIMER EXPIRES
     if chat_id in round_end_time and time.time() < round_end_time[chat_id]:
         remaining = int(round_end_time[chat_id] - time.time())
         await update.message.reply_text(f"⏳ wait {remaining}s before reveal is allowed")
