@@ -245,22 +245,47 @@ def _extract_keywords_fallback(text: str) -> list:
 
 def redact_answer(answer: str, keywords: list) -> str:
     """
-    Replace each keyword with a ▓ block the same length as the word.
-    Multi-word keywords get a single solid block across the full phrase.
-    Handles hyphenated variants (Mar-A-Lago / Mar A Lago) by normalizing separators.
-    Sorts longest-first so "Bill Clinton" is caught before "Clinton".
+    Replace each keyword with a ▓ block scaled to keyword length.
+
+    Matching strategy per keyword (tries each in order, stops on first hit):
+      1. Flexible separator match — handles Mar-A-Lago / Mar A Lago / mar a lago
+      2. Exact case-insensitive match on the normalized keyword
+      3. Last-word match — if keyword is a full name and only surname appears in answer
+         e.g. keyword "Bill Clinton", answer only contains "Clinton"
+
+    Sorts longest-first so multi-word phrases are caught before their components.
     """
     redacted = answer
     for keyword in sorted(keywords, key=len, reverse=True):
         normalized = re.sub(r'\s+', ' ', keyword.strip())
         block = "▓" * len(normalized)
 
-        # Build pattern that matches the keyword with any separator style
-        # e.g. "Mar-A-Lago" matches "Mar A Lago", "mar-a-lago", "Mar A-Lago" etc.
-        tokens = re.split(r'[\s\-_]+', re.escape(normalized))
+        # Strategy 1: flexible separator pattern
+        # Split on whitespace/hyphens/underscores BEFORE escaping individual tokens
+        tokens = [re.escape(t) for t in re.split(r'[\s\-_]+', normalized)]
         flexible = r'[\s\-_]+'.join(tokens)
+        new_redacted = re.sub(flexible, block, redacted, flags=re.IGNORECASE)
 
-        redacted = re.sub(flexible, block, redacted, flags=re.IGNORECASE)
+        if new_redacted != redacted:
+            redacted = new_redacted
+            continue
+
+        # Strategy 2: plain escaped match (catches anything strategy 1 missed)
+        new_redacted = re.sub(re.escape(normalized), block, redacted, flags=re.IGNORECASE)
+        if new_redacted != redacted:
+            redacted = new_redacted
+            continue
+
+        # Strategy 3: last-word fallback for full names
+        # If keyword is "Bill Clinton" but answer only says "Clinton", still redact it
+        parts = normalized.split()
+        if len(parts) > 1:
+            last = re.escape(parts[-1])
+            pattern = r'\b' + last + r'\b'
+            new_redacted = re.sub(pattern, block, redacted, flags=re.IGNORECASE)
+            if new_redacted != redacted:
+                redacted = new_redacted
+
     return redacted
 
 
