@@ -3,6 +3,7 @@ import time
 
 DB_FILE = "pepstein.db"
 
+
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -26,6 +27,7 @@ def init_db():
     conn.commit()
     conn.close()
 
+
 def add_points(user_id, username, points):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -39,6 +41,7 @@ def add_points(user_id, username, points):
     conn.commit()
     conn.close()
 
+
 def get_leaderboard(limit=10):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -51,6 +54,7 @@ def get_leaderboard(limit=10):
     conn.close()
     return rows
 
+
 def get_user_score(user_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -58,6 +62,7 @@ def get_user_score(user_id):
     row = cursor.fetchone()
     conn.close()
     return row[0] if row else 0
+
 
 def set_active_game(chat_id, original, redacted, keywords):
     conn = sqlite3.connect(DB_FILE)
@@ -70,6 +75,7 @@ def set_active_game(chat_id, original, redacted, keywords):
     """, (chat_id, original, redacted, keyword_str, time.time()))
     conn.commit()
     conn.close()
+
 
 def get_active_game(chat_id):
     conn = sqlite3.connect(DB_FILE)
@@ -86,13 +92,22 @@ def get_active_game(chat_id):
             "original": row[0],
             "redacted": row[1],
             "keywords": row[2].split("|") if row[2] else [],
-            "asked_at": row[3] if row[3] else 0
+            "asked_at": row[3] if row[3] else 0,
         }
     return None
+
 
 def clear_active_game(chat_id):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("UPDATE active_games SET active = 0 WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+
+
+def reset_leaderboard():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM scores")
     conn.commit()
     conn.close()
