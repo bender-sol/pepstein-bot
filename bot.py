@@ -411,11 +411,20 @@ async def _launch_round(update, context, question, answer, keywords, label="CLAS
     redacted = redact_answer(answer, keywords)
     logger.info("REDACTED result for chat %s: %s", chat_id, redacted)
 
+    # Only count keywords that were actually found and redacted in the answer text.
+    # Phantom keywords (not present in the answer) are silently dropped so the
+    # round can never get stuck waiting for an unguessable word.
+    active_keywords = [k for k in keywords if "▓" in redact_answer(answer, [k])]
+    if not active_keywords:
+        # Fallback — nothing redacted at all, use full list so game still launches
+        active_keywords = keywords
+    logger.info("ACTIVE KEYWORDS (matched in answer) for chat %s: %s", chat_id, active_keywords)
+
     d = DIFFICULTY[difficulty]
-    total = len(keywords)
+    total = len(active_keywords)
     round_block = build_round_block(difficulty, found=0, total=total)
 
-    set_active_game(chat_id, answer, redacted, keywords)
+    set_active_game(chat_id, answer, redacted, active_keywords)
     context.chat_data["difficulty"] = difficulty
     context.chat_data["active_question"] = question
     context.chat_data["total_keywords"] = total
