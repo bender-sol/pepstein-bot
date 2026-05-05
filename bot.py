@@ -509,14 +509,17 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("📭 The archive has no records yet.")
         return
 
-    lines = ["🏛 *PEPSTEIN ARCHIVE — TOP OPERATIVES*\n"]
+    # Use HTML to avoid Markdown parse failures from usernames with _ . * etc.
+    import html
+    lines = ["🏛 <b>PEPSTEIN ARCHIVE — TOP OPERATIVES</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
     for i, (username, pts) in enumerate(rows[:10]):
         prefix = medals[i] if i < 3 else f"{i+1}."
-        lines.append(f"{prefix} {username} — {pts} pts")
+        safe_name = html.escape(username or "unknown")
+        lines.append(f"{prefix} {safe_name} — {pts} pts")
 
-    lines.append("\n_They read the files. Did you?_")
-    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+    lines.append("\n<i>They read the files. Did you?</i>")
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
 # --------------------
