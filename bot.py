@@ -220,7 +220,8 @@ def refine_keywords(answer: str, keywords: list) -> list:
 
     numbers = _extract_numbers(answer)
     tier1 = [n for n in numbers if n not in seen]
-    tier2 = [w for w in words if len(w.split()) > 1]
+    # Cap at 3 words — longer phrases are descriptions, not guessable keywords
+    tier2 = [w for w in words if 1 < len(w.split()) <= 3]
     tier3 = [
         w for w in words
         if w[0].isupper()
@@ -678,12 +679,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     add_points(user.id, user.username or user.first_name, points)
 
-    remaining = [k for k in game["keywords"] if k not in matched]
+    # Case-insensitive comparison — DB round-trip can alter casing
+    matched_lower = {m.lower() for m in matched}
+    remaining = [k for k in game["keywords"] if k.lower() not in matched_lower]
 
     if remaining:
         new_redacted = redact_answer(game["original"], remaining)
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
+        # Update pinned message — isolated so any crash here never kills the feedback
         pinned_id = context.chat_data.get("pinned_game_message")
         if pinned_id:
             try:
@@ -705,15 +709,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="Markdown",
                 )
             except Exception:
-                logger.exception("Failed to update pinned message after partial guess")
+                logger.exception("Pinned message update failed for chat %s", chat_id)
 
-        # Always send per-guess feedback — every matched word gets acknowledged
-        word_list = ", ".join(f"`{w}`" for w in matched)
-        await update.message.reply_text(
-            f"✅ *{user.first_name}* recovered {word_list} _(+{points} pts)_\n"
-            f"🔎 {len(remaining)} word(s) still redacted.",
-            parse_mode="Markdown",
-        )
+        # Feedback — always fires regardless of pinned edit outcome
+        try:
+            word_list = ", ".join(f"`{w}`" for w in matched)
+            await update.message.reply_text(
+                f"✅ *{user.first_name}* recovered {word_list} _(+{points} pts)_\n"
+                f"🔎 {len(remaining)} word(s) still redacted.",
+                parse_mode="Markdown",
+            )
+        except Exception:
+            # Fallback without Markdown if formatting fails
+            word_list_plain = ", ".join(matched)
+            await update.message.reply_text(
+                f"✅ {user.first_name} recovered {word_list_plain} (+{points} pts)\n"
+                f"🔎 {len(remaining)} word(s) still redacted."
+            )
 
     else:
         flavour = await _end_round(context, chat_id, game, reason="solved")
