@@ -53,19 +53,28 @@ _KEYWORD_BLACKLIST = {
     "type", "form", "number", "year", "years",
 }
 
+# Injected into every system prompt to get better keywords from the model
 _KEYWORD_SYSTEM_ADDON = (
     "\n\nFor KEYWORDS, only include:\n"
     "- Proper names (people, places, organisations)\n"
-    "- Specific years or numbers\n"
-    "- Technical terms or titles central to the answer\n"
+    "- Specific years or numbers central to the answer\n"
+    "- Technical terms or titles that are the crux of the answer\n"
     "Never include generic words like 'known', 'used', 'called', 'world', 'people'.\n"
-    "The keywords must be the words someone would need to guess to prove they know the answer.\n"
-    "Include at least 4 keywords."
+    "The keywords must be the specific words someone would need to know to prove "
+    "they actually know the answer — not just words that appear in it.\n"
+    "Include at least 4 keywords.\n\n"
+    "CRITICAL — CLUE RULE:\n"
+    "Your answer MUST contain enough context that a reader can figure out what "
+    "the redacted words are. If you redact a name, the answer must include their "
+    "role, nationality, relationship, or some other identifying detail. "
+    "Example: if 'Alan Dershowitz' is redacted, write 'the celebrity defense attorney' "
+    "or 'Harvard law professor' in the answer so players have something to work with. "
+    "Never redact a name and leave zero context about who that person is."
 )
 
 
-def _clean_keywords(keywords: list[str]) -> list[str]:
-    """Filter out blacklisted and trivially short keywords."""
+def _clean_keywords(keywords: list) -> list:
+    """Filter out blacklisted and trivially short keywords, deduplicate."""
     seen = set()
     cleaned = []
     for k in keywords:
@@ -82,7 +91,7 @@ def _sub_epstein(text: str) -> str:
     return text
 
 
-def generate_trivia() -> tuple[str, str, list[str]]:
+def generate_trivia() -> tuple:
     """
     Pepstein generates its own question and answer from Epstein-adjacent topics.
     Returns (question, answer, keywords).
@@ -103,9 +112,15 @@ def generate_trivia() -> tuple[str, str, list[str]]:
                         f"{category}.\n\n"
                         "Rules:\n"
                         "- The question must be factual and specific\n"
-                        "- The answer should be 2-3 sentences, accurate, darkly funny, and slightly unhinged\n"
-                        "- Write like someone who knows where the bodies are and is annoyed nobody else does\n"
-                        "- Do not editorialize with phrases like 'it's worth noting' — just drop the facts like they're cursed\n\n"
+                        "- The answer should be 2-3 sentences, accurate, darkly funny, "
+                        "and slightly unhinged\n"
+                        "- Write like someone who knows where the bodies are and is annoyed "
+                        "nobody else does\n"
+                        "- Do not editorialize with phrases like 'it's worth noting' — "
+                        "just drop the facts like they're cursed\n"
+                        "- The answer MUST contain identifying context for every name you "
+                        "include as a keyword (role, title, relationship, nationality, etc.) "
+                        "so players can figure out who is being redacted\n\n"
                         "Format your response EXACTLY like this:\n"
                         "QUESTION: your question here\n"
                         "ANSWER: your answer here\n"
@@ -114,7 +129,7 @@ def generate_trivia() -> tuple[str, str, list[str]]:
                 },
                 {"role": "user", "content": "Generate a trivia question."}
             ],
-            max_tokens=400,
+            max_tokens=450,
             temperature=0.95,
         )
 
@@ -134,7 +149,6 @@ def generate_trivia() -> tuple[str, str, list[str]]:
                 keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()]
 
         keywords = _clean_keywords(keywords)
-
         answer = _sub_epstein(answer)
         question = _sub_epstein(question)
 
@@ -151,15 +165,15 @@ def generate_trivia() -> tuple[str, str, list[str]]:
 def _fallback_trivia():
     return (
         "What was the official name of Pepstein's private island in the US Virgin Islands?",
-        "Little Saint James — or as Pepstein called it, 'the island' — sat in the US Virgin Islands "
-        "and somehow attracted more powerful visitors than the UN General Assembly, "
+        "Little Saint James — or as Pepstein called it, 'the island' — sat in the US Virgin "
+        "Islands and somehow attracted more powerful visitors than the UN General Assembly, "
         "but with a substantially worse paper trail. Federal investigators arrested him in 2019, "
         "by which point half of Washington had apparently lost their calendars.",
         ["Little Saint James", "US Virgin Islands", "2019", "Washington"]
     )
 
 
-def get_answer(question: str) -> tuple[str, list[str]]:
+def get_answer(question: str) -> tuple:
     """Answer a user-supplied question with Pepstein flavoring."""
     try:
         response = client.chat.completions.create(
@@ -175,9 +189,12 @@ def get_answer(question: str) -> tuple[str, list[str]]:
                         "reading from a dossier they weren't supposed to keep. "
                         "Be accurate first, outrageously sardonic second. "
                         "Do not hedge or soften. The facts are already doing the work.\n\n"
+                        "The answer MUST contain identifying context for every name you include "
+                        "as a keyword — role, title, relationship, or some other clue — so players "
+                        "can figure out who is being redacted.\n\n"
                         "After your answer, on a new line write: KEYWORDS: followed by a "
                         "comma-separated list of 4-5 of the most important specific words or "
-                        "phrases in your answer — names, dates, places, numbers only.\n\n"
+                        "phrases — names, dates, places, numbers only.\n\n"
                         "Example format:\n"
                         "The answer is something accurate and deeply cursed.\n"
                         "KEYWORDS: word1, word2, word3, word4"
@@ -185,7 +202,7 @@ def get_answer(question: str) -> tuple[str, list[str]]:
                 },
                 {"role": "user", "content": question}
             ],
-            max_tokens=300,
+            max_tokens=350,
             temperature=0.85,
         )
         full_text = response.choices[0].message.content.strip()
@@ -213,39 +230,41 @@ def get_answer(question: str) -> tuple[str, list[str]]:
         )
 
 
-def _extract_keywords_fallback(text: str) -> list[str]:
+def _extract_keywords_fallback(text: str) -> list:
     """
     Last resort keyword extraction when the model doesn't return a KEYWORDS line.
     Prioritises capitalised words and years over random long words.
     """
-    # Years and numbers first
     numbers = re.findall(r'\b\d{4}\b', text)
-
-    # Capitalised words (likely proper nouns) — skip sentence-start words heuristically
     cap_words = re.findall(r'(?<![.!?]\s)\b[A-Z][a-z]{2,}\b', text)
-
-    # Long words as fallback
     long_words = re.findall(r'\b[A-Za-z]{7,}\b', text)
 
     pool = numbers + cap_words + long_words
     return _clean_keywords(pool)[:5]
 
 
-def redact_answer(answer: str, keywords: list[str]) -> str:
+def redact_answer(answer: str, keywords: list) -> str:
     """
     Replace each keyword with a ▓ block the same length as the word.
     Multi-word keywords get a single solid block across the full phrase.
+    Handles hyphenated variants (Mar-A-Lago / Mar A Lago) by normalizing separators.
+    Sorts longest-first so "Bill Clinton" is caught before "Clinton".
     """
     redacted = answer
-    # Sort longest first so "Bill Clinton" is caught before "Clinton"
     for keyword in sorted(keywords, key=len, reverse=True):
-        block = "▓" * len(keyword)
-        escaped = re.escape(keyword)
-        redacted = re.sub(escaped, block, redacted, flags=re.IGNORECASE)
+        normalized = re.sub(r'\s+', ' ', keyword.strip())
+        block = "▓" * len(normalized)
+
+        # Build pattern that matches the keyword with any separator style
+        # e.g. "Mar-A-Lago" matches "Mar A Lago", "mar-a-lago", "Mar A-Lago" etc.
+        tokens = re.split(r'[\s\-_]+', re.escape(normalized))
+        flexible = r'[\s\-_]+'.join(tokens)
+
+        redacted = re.sub(flexible, block, redacted, flags=re.IGNORECASE)
     return redacted
 
 
-def check_guess(guess: str, keywords: list[str]) -> list[str]:
+def check_guess(guess: str, keywords: list) -> list:
     """Simple exact/substring match — fuzzy matching lives in bot.py."""
     guess_lower = guess.lower().strip()
     matched = []

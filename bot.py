@@ -26,6 +26,7 @@ from database import (
     set_active_game,
     get_active_game,
     clear_active_game,
+    reset_leaderboard,
 )
 
 from redactor import get_answer, generate_trivia, redact_answer
@@ -36,7 +37,7 @@ from redactor import get_answer, generate_trivia, redact_answer
 # --------------------
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # set ADMIN_ID in Railway variables
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 if not TELEGRAM_TOKEN:
     raise ValueError("TELEGRAM_TOKEN is missing (Railway Variables)")
@@ -89,6 +90,7 @@ def build_round_block(difficulty: str) -> str:
         f"• Guess the redacted words\n"
         f"• Typos tolerated — the archive is forgiving\n"
         f"• Partial names count\n"
+        f"• Numbers and dates must be exact\n"
         f"• +{d['points']} pts per word recovered\n"
         f"• Round continues until all words are found\n"
         f"• /reveal and new rounds unlock after {timer_str} timer\n"
@@ -130,8 +132,6 @@ async def start_round_timer(context, chat_id, message_id, duration):
 
             remaining = int(round_end_time[chat_id] - time.time())
             if remaining <= 0:
-                # Timer expired — notify but keep the round alive.
-                # /reveal and new rounds are now unlocked.
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=(
@@ -158,16 +158,13 @@ async def start_round_timer(context, chat_id, message_id, duration):
                     parse_mode="Markdown",
                 )
             except RetryAfter as e:
-                # Telegram is rate-limiting — back off as instructed, then resume
                 await asyncio.sleep(e.retry_after)
             except Exception:
-                # Message deleted or too many edits — not fatal
                 logger.exception("Timer edit failed for chat %s", chat_id)
 
             await asyncio.sleep(1)
 
     except asyncio.CancelledError:
-        # Clean cancellation from a completed/revealed/forced round — expected
         pass
     except Exception:
         logger.exception("start_round_timer crashed for chat %s", chat_id)
@@ -177,7 +174,6 @@ async def start_round_timer(context, chat_id, message_id, duration):
 # KEYWORD INTELLIGENCE
 # --------------------
 
-# Never redact these — pure grammar/function words
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
     "of", "with", "by", "from", "is", "was", "are", "were", "be", "been",
@@ -188,7 +184,6 @@ _STOPWORDS = {
     "should", "may", "might", "can", "one", "two", "more", "most",
 }
 
-# Looks meaningful but adds nothing to the puzzle — don't redact
 _GENERIC_FILLER = {
     "known", "used", "made", "called", "named", "based", "including",
     "during", "after", "before", "part", "place", "time", "way",
@@ -203,26 +198,16 @@ _GENERIC_FILLER = {
 }
 
 
-def _extract_numbers(answer: str) -> list[str]:
-    """Pull standalone numbers and years — always high-value redactions."""
+def _extract_numbers(answer: str) -> list:
     return re.findall(r'\b\d{4}\b|\b\d+(?:\.\d+)?(?:%|million|billion|thousand)?\b', answer)
 
 
-def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
-    """
-    Extract the words most central to answering the question:
-    names, organisations, specific numbers, key proper nouns.
+def _is_numeric_keyword(keyword: str) -> bool:
+    """True if keyword is a number/year/date that must be matched exactly."""
+    return bool(re.match(r'^\d', keyword.strip()))
 
-    Priority order:
-      1. Numbers / years found directly in the answer text
-      2. Multi-word phrases (named entities — most valuable)
-      3. Capitalized single words (proper nouns)
-      4. Long specific words (>6 chars, not generic filler)
-      5. Any remaining keyword as last resort
 
-    Target: 3-6 redactions. Never fewer than 3.
-    """
-    # Deduplicate while preserving order, drop pure stopwords
+def refine_keywords(answer: str, keywords: list) -> list:
     seen = set()
     words = []
     for w in keywords:
@@ -231,14 +216,9 @@ def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
             seen.add(key)
             words.append(w.strip())
 
-    # Tier 1 — numbers and years pulled directly from the answer
     numbers = _extract_numbers(answer)
     tier1 = [n for n in numbers if n not in seen]
-
-    # Tier 2 — multi-word phrases (e.g. "Barack Obama", "British Virgin Islands")
     tier2 = [w for w in words if len(w.split()) > 1]
-
-    # Tier 3 — capitalized single words (proper nouns)
     tier3 = [
         w for w in words
         if w[0].isupper()
@@ -246,8 +226,6 @@ def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
         and w not in tier2
         and w.lower() not in _STOPWORDS
     ]
-
-    # Tier 4 — long specific words not already captured
     captured = set(tier2 + tier3)
     tier4 = [
         w for w in words
@@ -255,14 +233,11 @@ def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
         and len(w) > 6
         and w.lower() not in _GENERIC_FILLER
     ]
-
-    # Tier 5 — anything left as absolute fallback
     captured.update(tier4)
     tier5 = [w for w in words if w not in captured]
 
     pool = tier1 + tier2 + tier3 + tier4 + tier5
 
-    # Take up to 6, enforce minimum of 3
     final = []
     for w in pool:
         if len(final) >= 6:
@@ -270,7 +245,6 @@ def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
         if w not in final:
             final.append(w)
 
-    # Safety net: if still under 3, mine words directly from answer text
     if len(final) < 3:
         answer_words = [w.strip(".,;:()[]\"'") for w in answer.split()]
         for w in answer_words:
@@ -288,22 +262,21 @@ def refine_keywords(answer: str, keywords: list[str]) -> list[str]:
     return final
 
 
-def infer_difficulty(keywords: list[str]) -> str:
+def infer_difficulty(keywords: list) -> str:
     """
-    Infer difficulty from the refined keyword list.
-    Target distribution: easy ~50%, medium ~35%, hard ~15%.
+    Target distribution: easy ~40%, medium ~40%, hard ~20%.
 
-    Easy:   3 or fewer keywords, no obscure terms, no numbers+multiword combo
-    Hard:   6 keywords, OR numbers AND multi-word phrases together,
-            OR 3+ keywords longer than 10 chars (genuinely obscure)
+    Easy:   3 or fewer keywords AND no obscure long terms
+    Hard:   strictly 6 keywords, OR numbers+multiword together AND 5+ keywords,
+            OR 3+ keywords longer than 10 chars
     Medium: everything else
     """
     count = len(keywords)
-    has_number = any(re.match(r'^\d', k) for k in keywords)
+    has_number = any(_is_numeric_keyword(k) for k in keywords)
     has_multiword = any(len(k.split()) > 1 for k in keywords)
     long_obscure = sum(1 for k in keywords if len(k) > 10)
 
-    if count >= 6 or (has_number and has_multiword) or long_obscure >= 3:
+    if count >= 6 or (has_number and has_multiword and count >= 5) or long_obscure >= 3:
         return "hard"
     elif count <= 3 and long_obscure == 0:
         return "easy"
@@ -315,14 +288,12 @@ def infer_difficulty(keywords: list[str]) -> str:
 # TASK HELPERS
 # --------------------
 def _cancel_timer(context):
-    """Cancel any running timer task for this chat."""
     task = context.chat_data.pop("timer_task", None)
     if task and not task.done():
         task.cancel()
 
 
 def _start_timer(context, chat_id, message_id, duration):
-    """Spawn a timer task and store the reference."""
     _cancel_timer(context)
     task = asyncio.create_task(
         start_round_timer(context, chat_id, message_id, duration)
@@ -334,17 +305,115 @@ def _start_timer(context, chat_id, message_id, duration):
 # END ROUND HELPER
 # --------------------
 async def _end_round(context, chat_id, game, reason="revealed"):
-    """Shared teardown for any round-ending path."""
+    """Shared teardown. Returns (flavour_line, full_answer)."""
     _cancel_timer(context)
     clear_active_game(chat_id)
     await unpin_message(context, chat_id)
 
     if reason == "forced":
-        return "_Round terminated. The archive does not negotiate._"
+        flavour = "_Round terminated. The archive does not negotiate._"
     elif reason == "revealed":
-        return "_Now you know. Act accordingly._"
+        flavour = "_Now you know. Act accordingly._"
+    elif reason == "solved":
+        flavour = "_The archive has been compromised._"
     else:
-        return "_The file has been closed._"
+        flavour = "_The file has been closed._"
+
+    return flavour
+
+
+# --------------------
+# GUESS MATCHING
+# --------------------
+def normalize(text: str) -> str:
+    # Normalize separators — hyphens, dashes, underscores treated as spaces
+    text = re.sub(r'[-_]', ' ', text)
+    return text.lower().strip()
+
+
+def similarity(a, b):
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def fuzzy_match(guess: str, keyword: str) -> bool:
+    """
+    Fuzzy match for text keywords. Numbers/dates must be exact — handled separately.
+    """
+    guess_n = normalize(guess)
+    keyword_n = normalize(keyword)
+
+    fillers = {"the", "a", "an"}
+    guess_tokens = [g for g in guess_n.split() if g not in fillers]
+    keyword_tokens = [k for k in keyword_n.split() if k not in fillers]
+
+    guess_clean = " ".join(guess_tokens)
+    keyword_clean = " ".join(keyword_tokens)
+
+    # Substring match — handles partial names ("Clinton" matching "Bill Clinton")
+    if keyword_clean in guess_clean or guess_clean in keyword_clean:
+        return True
+
+    # Fuzzy similarity — handles typos, slight misspellings
+    if similarity(guess_clean, keyword_clean) > 0.80:
+        return True
+
+    # Token-level match — any single token of the keyword found in guess
+    # e.g. "lago" matching "Mar-A-Lago" after normalization
+    for token in keyword_tokens:
+        if len(token) > 2 and token in guess_tokens:
+            return True
+
+    return False
+
+
+def check_guess_flexible(guess: str, keywords: list) -> list:
+    matched = []
+    for k in keywords:
+        if _is_numeric_keyword(k):
+            # Numbers and dates: exact match only (strip whitespace, normalize separators)
+            if normalize(guess).replace(" ", "") == normalize(k).replace(" ", ""):
+                matched.append(k)
+        else:
+            # Text: fuzzy match against full keyword and individual parts
+            parts = k.split()
+            if fuzzy_match(guess, k) or any(fuzzy_match(guess, p) for p in parts if len(p) > 2):
+                matched.append(k)
+    return list(set(matched))
+
+
+# --------------------
+# SHARED ROUND LAUNCH
+# --------------------
+async def _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE"):
+    chat_id = update.effective_chat.id
+
+    keywords = refine_keywords(answer, keywords)
+    logger.info("KEYWORDS for chat %s: %s", chat_id, keywords)
+
+    redacted = redact_answer(answer, keywords)
+    logger.info("REDACTED result for chat %s: %s", chat_id, redacted)
+
+    difficulty = infer_difficulty(keywords)
+    d = DIFFICULTY[difficulty]
+    round_block = build_round_block(difficulty)
+
+    set_active_game(chat_id, answer, redacted, keywords)
+    context.chat_data["difficulty"] = difficulty
+    context.chat_data["active_question"] = question
+
+    msg = await update.message.reply_text(
+        f"📄 *{label}* — {d['label']}\n\n"
+        f"🧠 {question}\n\n"
+        f"🧾 {redacted}\n\n"
+        f"{round_block}",
+        parse_mode="Markdown",
+    )
+
+    context.chat_data["last_round_text"] = msg.text
+    context.chat_data["pinned_game_message"] = msg.message_id
+
+    await pin_message(context, chat_id, msg.message_id)
+    _start_timer(context, chat_id, msg.message_id, d["timer"])
 
 
 # --------------------
@@ -386,7 +455,8 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• 🟢 Easy — +5 pts per word\n"
         "• 🟡 Medium — +8 pts per word\n"
         "• 🔴 Hard — +12 pts per word\n"
-        "• Typos tolerated. Partial names accepted.\n\n"
+        "• Typos tolerated. Partial names accepted.\n"
+        "• Numbers and dates must be exact.\n\n"
         "⏱ *TIMER:*\n"
         "• Easy — 1:30\n"
         "• Medium — 3:00\n"
@@ -429,79 +499,6 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     lines.append("\n_They read the files. Did you?_")
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
-
-
-# --------------------
-# GAME FUNCTIONS
-# --------------------
-def normalize(text: str) -> str:
-    return text.lower().strip()
-
-
-def similarity(a, b):
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-def fuzzy_match(guess: str, keyword: str) -> bool:
-    guess = normalize(guess)
-    keyword = normalize(keyword)
-
-    fillers = {"the", "a", "an"}
-    guess_tokens   = [g for g in guess.split()   if g not in fillers]
-    keyword_tokens = [k for k in keyword.split() if k not in fillers]
-
-    guess_clean   = " ".join(guess_tokens)
-    keyword_clean = " ".join(keyword_tokens)
-
-    if keyword_clean in guess_clean or guess_clean in keyword_clean:
-        return True
-
-    return similarity(guess_clean, keyword_clean) > 0.82
-
-
-def check_guess_flexible(guess: str, keywords: list[str]) -> list[str]:
-    matched = []
-    for k in keywords:
-        parts = k.split()
-        if any(fuzzy_match(guess, p) for p in parts) or fuzzy_match(guess, k):
-            matched.append(k)
-    return list(set(matched))
-
-
-# --------------------
-# SHARED ROUND LAUNCH
-# --------------------
-async def _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE"):
-    """Shared logic for trivia and ask commands."""
-    chat_id = update.effective_chat.id
-
-    keywords = refine_keywords(answer, keywords)
-    logger.info("KEYWORDS for chat %s: %s", chat_id, keywords)
-
-    redacted = redact_answer(answer, keywords)
-    logger.info("REDACTED result for chat %s: %s", chat_id, redacted)
-
-    difficulty = infer_difficulty(keywords)
-    d = DIFFICULTY[difficulty]
-    round_block = build_round_block(difficulty)
-
-    set_active_game(chat_id, answer, redacted, keywords)
-    context.chat_data["difficulty"] = difficulty
-
-    msg = await update.message.reply_text(
-        f"📄 *{label}* — {d['label']}\n\n"
-        f"🧠 {question}\n\n"
-        f"🧾 {redacted}\n\n"
-        f"{round_block}",
-        parse_mode="Markdown",
-    )
-
-    context.chat_data["last_round_text"] = msg.text
-    context.chat_data["pinned_game_message"] = msg.message_id
-    context.chat_data["active_question"] = question
-
-    await pin_message(context, chat_id, msg.message_id)
-    _start_timer(context, chat_id, msg.message_id, d["timer"])
 
 
 # --------------------
@@ -569,7 +566,6 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 no active round")
         return
 
-    # Use DB asked_at + difficulty timer as source of truth — survives restarts
     lock = DIFFICULTY.get(
         context.chat_data.get("difficulty", DEFAULT_DIFFICULTY),
         DIFFICULTY[DEFAULT_DIFFICULTY]
@@ -587,13 +583,15 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     flavour = await _end_round(context, chat_id, game, reason="revealed")
 
     await update.message.reply_text(
-        f"🔓 *FILE DECLASSIFIED*\n\n{game['original']}\n\n{flavour}",
+        f"🔓 *FILE DECLASSIFIED*\n\n"
+        f"*Answer:* {game['original']}\n\n"
+        f"{flavour}",
         parse_mode="Markdown",
     )
 
 
 # --------------------
-# FORCE (admin/testing only — not listed in /start or /rules)
+# FORCE (admin/testing only — unlisted)
 # --------------------
 async def force_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -613,9 +611,23 @@ async def force_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"⛔ *ROUND TERMINATED*\n\n"
-        f"🔓 {game['original']}\n\n{flavour}",
+        f"*Answer:* {game['original']}\n\n"
+        f"{flavour}",
         parse_mode="Markdown",
     )
+
+
+# --------------------
+# LEADERBOARD RESET (admin only — unlisted, no mention anywhere)
+# --------------------
+async def qwerty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+
+    if ADMIN_ID and user.id != ADMIN_ID:
+        return  # Silent — don't even acknowledge the command exists
+
+    reset_leaderboard()
+    await update.message.reply_text("♻️ archive records wiped.")
 
 
 # --------------------
@@ -639,7 +651,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not matched:
         return
 
-    # Points scale with difficulty
     difficulty = context.chat_data.get("difficulty", DEFAULT_DIFFICULTY)
     pts_per_word = DIFFICULTY.get(difficulty, DIFFICULTY[DEFAULT_DIFFICULTY])["points"]
     points = len(matched) * pts_per_word
@@ -673,19 +684,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 logger.exception("Failed to update pinned message after partial guess")
 
+        # Always send per-guess feedback — every matched word gets acknowledged
+        word_list = ", ".join(f"`{w}`" for w in matched)
         await update.message.reply_text(
-            f"✅ *{user.first_name}* recovered `{', '.join(matched)}` _(+{points} pts)_\n"
+            f"✅ *{user.first_name}* recovered {word_list} _(+{points} pts)_\n"
             f"🔎 {len(remaining)} word(s) still redacted.",
             parse_mode="Markdown",
         )
 
     else:
         flavour = await _end_round(context, chat_id, game, reason="solved")
+        word_list = ", ".join(f"`{w}`" for w in matched)
 
         await update.message.reply_text(
-            f"🎉 *{user.first_name} cracked the file!* _(+{points} pts)_\n\n"
-            f"🔓 {game['original']}\n\n"
-            "_The archive has been compromised._",
+            f"✅ *{user.first_name}* recovered {word_list} _(+{points} pts)_\n\n"
+            f"🎉 *File cracked!*\n\n"
+            f"*Full answer:* {game['original']}\n\n"
+            f"{flavour}",
             parse_mode="Markdown",
         )
 
@@ -705,7 +720,8 @@ def main():
     app.add_handler(CommandHandler("reveal", reveal_command))
     app.add_handler(CommandHandler("score", score_command))
     app.add_handler(CommandHandler("leaderboard", leaderboard_command))
-    app.add_handler(CommandHandler("force", force_command))  # unlisted admin command
+    app.add_handler(CommandHandler("force", force_command))
+    app.add_handler(CommandHandler("qwerty", qwerty_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     logger.info("Pepstein Archive online.")
