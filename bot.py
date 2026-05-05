@@ -80,13 +80,15 @@ round_end_time = {}
 # --------------------
 # ROUND UI BLOCK
 # --------------------
-def build_round_block(difficulty: str) -> str:
+def build_round_block(difficulty: str, found: int = 0, total: int = 0) -> str:
     d = DIFFICULTY.get(difficulty, DIFFICULTY[DEFAULT_DIFFICULTY])
     mins = d["timer"] // 60
     secs = d["timer"] % 60
     timer_str = f"{mins}:{secs:02d}" if secs else f"{mins}:00"
+    progress = f"📊 *{found}/{total} words found*\n\n" if total > 0 else ""
     return (
-        f"🗂 *ROUND ACTIVE* — {d['label']}\n\n"
+        f"🗂 *ROUND ACTIVE* — {d['label']}\n"
+        f"{progress}"
         f"• Guess the redacted words\n"
         f"• Typos tolerated — the archive is forgiving\n"
         f"• Partial names count\n"
@@ -409,11 +411,13 @@ async def _launch_round(update, context, question, answer, keywords, label="CLAS
     logger.info("REDACTED result for chat %s: %s", chat_id, redacted)
 
     d = DIFFICULTY[difficulty]
-    round_block = build_round_block(difficulty)
+    total = len(keywords)
+    round_block = build_round_block(difficulty, found=0, total=total)
 
     set_active_game(chat_id, answer, redacted, keywords)
     context.chat_data["difficulty"] = difficulty
     context.chat_data["active_question"] = question
+    context.chat_data["total_keywords"] = total
 
     msg = await update.message.reply_text(
         f"📄 *{label}* — {d['label']}\n\n"
@@ -682,11 +686,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 active_q = context.chat_data.get("active_question", "")
                 d_label = DIFFICULTY.get(difficulty, DIFFICULTY[DEFAULT_DIFFICULTY])["label"]
+                total = context.chat_data.get("total_keywords", len(game["keywords"]) + len(matched))
+                found = total - len(remaining)
                 base = (
                     f"📄 *ROUND IN PROGRESS* — {d_label}\n\n"
                     f"🧠 {active_q}\n\n"
                     f"🧾 {new_redacted}\n\n"
-                    f"{build_round_block(difficulty)}"
+                    f"{build_round_block(difficulty, found=found, total=total)}"
                 )
                 context.chat_data["last_round_text"] = base
                 await context.bot.edit_message_text(
