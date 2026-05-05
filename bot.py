@@ -264,24 +264,37 @@ def refine_keywords(answer: str, keywords: list) -> list:
 
 def infer_difficulty(keywords: list) -> str:
     """
-    Target distribution: easy ~40%, medium ~40%, hard ~20%.
+    Weighted random assignment: 40% easy, 40% medium, 20% hard.
 
-    Easy:   3 or fewer keywords AND no obscure long terms
-    Hard:   strictly 6 keywords, OR numbers+multiword together AND 5+ keywords,
-            OR 3+ keywords longer than 10 chars
-    Medium: everything else
+    The content (Epstein-adjacent trivia with multiple names/dates in every answer)
+    makes heuristic difficulty detection unreliable — almost everything scores as hard.
+    Weighted random guarantees the target distribution regardless of keyword count.
+
+    The number of keywords to redact is then scaled to match the assigned difficulty:
+    - Easy:   redact 2-3 keywords
+    - Medium: redact 3-4 keywords
+    - Hard:   redact 4-6 keywords
     """
-    count = len(keywords)
-    has_number = any(_is_numeric_keyword(k) for k in keywords)
-    has_multiword = any(len(k.split()) > 1 for k in keywords)
-    long_obscure = sum(1 for k in keywords if len(k) > 10)
+    import random
+    return random.choices(
+        ["easy", "medium", "hard"],
+        weights=[40, 40, 20],
+        k=1
+    )[0]
 
-    if count >= 6 or (has_number and has_multiword and count >= 5) or long_obscure >= 3:
-        return "hard"
-    elif count <= 3 and long_obscure == 0:
-        return "easy"
-    else:
-        return "medium"
+
+def trim_keywords_to_difficulty(keywords: list, difficulty: str) -> list:
+    """
+    Trim the keyword list to an appropriate length for the assigned difficulty.
+    Always keeps the highest-priority keywords (front of list, already sorted by tier).
+    """
+    limits = {"easy": 3, "medium": 4, "hard": 6}
+    floors = {"easy": 2, "medium": 3, "hard": 4}
+    limit = limits.get(difficulty, 4)
+    floor = floors.get(difficulty, 2)
+    trimmed = keywords[:limit]
+    # Ensure minimum — shouldn't happen but safety net
+    return trimmed if len(trimmed) >= floor else keywords[:floor]
 
 
 # --------------------
@@ -388,12 +401,13 @@ async def _launch_round(update, context, question, answer, keywords, label="CLAS
     chat_id = update.effective_chat.id
 
     keywords = refine_keywords(answer, keywords)
-    logger.info("KEYWORDS for chat %s: %s", chat_id, keywords)
+    difficulty = infer_difficulty(keywords)
+    keywords = trim_keywords_to_difficulty(keywords, difficulty)
+    logger.info("DIFFICULTY: %s | KEYWORDS for chat %s: %s", difficulty, chat_id, keywords)
 
     redacted = redact_answer(answer, keywords)
     logger.info("REDACTED result for chat %s: %s", chat_id, redacted)
 
-    difficulty = infer_difficulty(keywords)
     d = DIFFICULTY[difficulty]
     round_block = build_round_block(difficulty)
 
