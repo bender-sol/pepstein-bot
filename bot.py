@@ -400,12 +400,18 @@ def check_guess_flexible(guess: str, keywords: list) -> list:
 # --------------------
 # SHARED ROUND LAUNCH
 # --------------------
-async def _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE"):
+async def _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE", preset_difficulty=None):
     chat_id = update.effective_chat.id
 
     keywords = refine_keywords(answer, keywords)
-    difficulty = infer_difficulty(keywords)
-    keywords = trim_keywords_to_difficulty(keywords, difficulty)
+    # Use pre-set difficulty from redactor if provided (baked into the prompt).
+    # Fall back to inference for /ask which doesn't pre-set difficulty.
+    if preset_difficulty and preset_difficulty in DIFFICULTY:
+        difficulty = preset_difficulty
+        keywords = trim_keywords_to_difficulty(keywords, difficulty)
+    else:
+        difficulty = infer_difficulty(keywords)
+        keywords = trim_keywords_to_difficulty(keywords, difficulty)
     logger.info("DIFFICULTY: %s | KEYWORDS for chat %s: %s", difficulty, chat_id, keywords)
 
     redacted = redact_answer(answer, keywords)
@@ -551,8 +557,11 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🗂 pulling file from the archive...")
 
-    question, answer, keywords = generate_trivia()
-    await _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE")
+    result = generate_trivia()
+    # redactor returns (question, answer, keywords, difficulty)
+    question, answer, keywords = result[0], result[1], result[2]
+    preset_diff = result[3] if len(result) > 3 else None
+    await _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE", preset_difficulty=preset_diff)
 
 
 # --------------------
