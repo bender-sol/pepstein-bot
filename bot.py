@@ -90,7 +90,7 @@ def build_round_block(difficulty: str, found: int = 0, total: int = 0) -> str:
         f"🗂 *ROUND ACTIVE* — {d['label']}\n"
         f"{progress}"
         f"• Guess the redacted words\n"
-        f"• Typos tolerated — the archive is forgiving\n"
+        f"• Typos tolerated — the files are forgiving\n"
         f"• Partial names count\n"
         f"• Numbers and dates must be exact\n"
         f"• +{d['points']} pts per word recovered\n"
@@ -327,11 +327,11 @@ async def _end_round(context, chat_id, game, reason="revealed"):
     await unpin_message(context, chat_id)
 
     if reason == "forced":
-        flavour = "_Round terminated. The archive does not negotiate._"
+        flavour = "_File closed. The Pepstein Files do not negotiate._"
     elif reason == "revealed":
         flavour = "_Now you know. Act accordingly._"
     elif reason == "solved":
-        flavour = "_The archive has been compromised._"
+        flavour = "_File cracked. The vault has been compromised._"
     else:
         flavour = "_The file has been closed._"
 
@@ -455,17 +455,18 @@ async def _launch_round(update, context, question, answer, keywords, label="CLAS
 # --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "📁 *PEPSTEIN ARCHIVE — ACCESS GRANTED*\n\n"
-        "You have been connected to a classified trivia reconstruction system.\n"
+        "📁 *THE PEPSTEIN FILES — ACCESS GRANTED*\n\n"
+        "_Some files were never meant to be opened._\n\n"
+        "You have been connected to a classified document reconstruction system.\n"
         "Critical words have been redacted. Your job is to recover them.\n\n"
         "🎮 *COMMANDS:*\n"
-        "• /trivia — pull a random file from the archive\n"
-        "• /ask [question] — submit your own inquiry\n"
+        "• /trivia — pull a random file from the vault\n"
+        "• /ask [question] — submit your own inquiry to the system\n"
         "• /reveal — declassify the answer _(timer must expire first)_\n"
         "• /score — your current standing\n"
         "• /leaderboard — who's been reading the files\n"
         "• /rules — full mechanics\n\n"
-        "⚠️ _The archive does not forget. Neither do we._"
+        "⚠️ _The files do not forget. Neither do we._"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -475,7 +476,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --------------------
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
-        "📜 *PEPSTEIN ARCHIVE — OPERATIONAL BRIEFING*\n\n"
+        "📜 *THE PEPSTEIN FILES — OPERATIONAL BRIEFING*\n\n"
         "🎯 *OBJECTIVE:*\n"
         "Identify the redacted words in each classified file.\n"
         "The redacted words are always central to the answer — no decoys.\n\n"
@@ -484,7 +485,7 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /ask — submit your own question to the system\n"
         "• /reveal — unlock the file _(only after timer expires)_\n"
         "• /score — your dossier\n"
-        "• /leaderboard — archive rankings\n\n"
+        "• /leaderboard — the vault rankings\n\n"
         "🏆 *SCORING:*\n"
         "• 🟢 Easy — +5 pts per word\n"
         "• 🟡 Medium — +8 pts per word\n"
@@ -510,8 +511,8 @@ async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     points = get_user_score(user.id)
     await update.message.reply_text(
         f"🗂 *DOSSIER: {user.first_name}*\n\n"
-        f"Archive standing: *{points} pts*\n\n"
-        "_The archive keeps score even when you don't._",
+        f"File clearance level: *{points} pts*\n\n"
+        "_The files keep score even when you don't._",
         parse_mode="Markdown",
     )
 
@@ -522,19 +523,19 @@ async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = get_leaderboard()
     if not rows:
-        await update.message.reply_text("📭 The archive has no records yet.")
+        await update.message.reply_text("📭 The vault has no records yet. The files are clean — for now.")
         return
 
     # Use HTML to avoid Markdown parse failures from usernames with _ . * etc.
     import html
-    lines = ["🏛 <b>PEPSTEIN ARCHIVE — TOP OPERATIVES</b>\n"]
+    lines = ["🏛 <b>THE PEPSTEIN FILES — TOP OPERATIVES</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
     for i, (username, pts) in enumerate(rows[:10]):
         prefix = medals[i] if i < 3 else f"{i+1}."
         safe_name = html.escape(username or "unknown")
         lines.append(f"{prefix} {safe_name} — {pts} pts")
 
-    lines.append("\n<i>They read the files. Did you?</i>")
+    lines.append("\n<i>They opened the files. Most people didn't.</i>")
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
@@ -555,7 +556,7 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⏳ round active — {remaining}s remaining")
             return
 
-    await update.message.reply_text("🗂 pulling file from the archive...")
+    await update.message.reply_text("🗂 pulling a file from the vault...")
 
     result = generate_trivia()
     # redactor returns (question, answer, keywords, difficulty)
@@ -570,7 +571,7 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
-            "Usage: `/ask [question]`\n_Submit your inquiry to the archive._",
+            "Usage: `/ask [question]`\n_Submit your inquiry to the files._",
             parse_mode="Markdown",
         )
         return
@@ -589,10 +590,10 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     question = " ".join(context.args)
-    await update.message.reply_text("🧠 cross-referencing the archive...")
+    await update.message.reply_text("🧠 cross-referencing the files...")
 
     answer, keywords = get_answer(question)
-    await _launch_round(update, context, question, answer, keywords, label="CUSTOM INQUIRY")
+    await _launch_round(update, context, question, answer, keywords, label="SUBMITTED INQUIRY")
 
 
 # --------------------
@@ -616,14 +617,14 @@ async def reveal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining = int(lock - elapsed)
         await update.message.reply_text(
             f"🔒 file still locked — {remaining}s remaining\n"
-            "_The archive releases on its own schedule._"
+            "_The files release on their own schedule._"
         )
         return
 
     flavour = await _end_round(context, chat_id, game, reason="revealed")
 
     await update.message.reply_text(
-        f"🔓 *FILE DECLASSIFIED*\n\n"
+        f"🔓 *PEPSTEIN FILE DECLASSIFIED*\n\n"
         f"*Answer:* {game['original']}\n\n"
         f"{flavour}",
         parse_mode="Markdown",
@@ -650,7 +651,7 @@ async def force_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     flavour = await _end_round(context, chat_id, game, reason="forced")
 
     await update.message.reply_text(
-        f"⛔ *ROUND TERMINATED*\n\n"
+        f"⛔ *FILE FORCIBLY CLOSED*\n\n"
         f"*Answer:* {game['original']}\n\n"
         f"{flavour}",
         parse_mode="Markdown",
@@ -667,7 +668,7 @@ async def qwerty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return  # Silent — don't even acknowledge the command exists
 
     reset_leaderboard()
-    await update.message.reply_text("♻️ archive records wiped.")
+    await update.message.reply_text("♻️ vault records wiped.")
 
 
 # --------------------
@@ -714,7 +715,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 total = context.chat_data.get("total_keywords", len(game["keywords"]) + len(matched))
                 found = total - len(remaining)
                 base = (
-                    f"📄 *ROUND IN PROGRESS* — {d_label}\n\n"
+                    f"📁 *PEPSTEIN FILE IN PROGRESS* — {d_label}\n\n"
                     f"🧠 {active_q}\n\n"
                     f"🧾 {new_redacted}\n\n"
                     f"{build_round_block(difficulty, found=found, total=total)}"
@@ -777,7 +778,7 @@ def main():
     app.add_handler(CommandHandler("qwerty", qwerty_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("Pepstein Archive online.")
+    logger.info("The Pepstein Files — online.")
     app.run_polling()
 
 
