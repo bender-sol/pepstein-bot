@@ -11,11 +11,18 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # CATEGORY POOLS
 #
 # Two pools — grounded and unhinged.
-# 65% grounded (real events), 35% degen conspiracy.
+# 50% grounded (Epstein-adjacent real events), 50% degen conspiracy.
 # --------------------
 
 GROUNDED_CATEGORIES = [
+    # Pepstein/Epstein — core content, multiple entries to increase weight
     "Jeffrey Epstein's associates, clients, or connections (always call him Pepstein)",
+    "Jeffrey Epstein's travel companions on the manifest (always call him Pepstein)",
+    "Jeffrey Epstein's properties, the island, and what allegedly happened there (always call him Pepstein)",
+    "Ghislaine Maxwell — her background, her role, her trial, her sentence",
+    "Les Wexner and his financial relationship with Pepstein",
+    "Virginia Giuffre and her lawsuit against Prince Andrew",
+    # Other real scandals
     "Donald Trump and his connections to powerful people or controversies",
     "Bill Clinton and his connections to powerful people or controversies",
     "Prince Andrew and his controversies",
@@ -24,55 +31,57 @@ GROUNDED_CATEGORIES = [
     "offshore finance, shell companies, or tax havens used by the ultra-wealthy",
     "sealed court documents or classified government files",
     "the CIA, FBI, or intelligence agencies and their controversies",
-    "famous people who died under suspicious circumstances",
-    "Ghislaine Maxwell and her background, connections, or trial",
-    "Les Wexner and his financial relationship with Pepstein",
+    "famous people who died under suspicious circumstances and why it seems fishy",
     "global elite gatherings like Davos, Bilderberg, or the World Economic Forum",
     "dark money in politics and super PACs",
     "MKUltra and CIA mind control experiments",
     "Operation Paperclip and Nazi scientists brought to the US",
     "the Panama Papers or Pandora Papers offshore leaks",
-    "powerful politicians caught in financial or personal scandals",
-    "the Vatican and its financial scandals or cover-ups",
-    "weapons dealers and arms trafficking connected to politicians",
-    "media moguls who controlled narratives and their connections to power",
-    "private intelligence firms and mercenaries like Blackwater or Mossad connections",
+    "the assassination of JFK — suspects, theories, and cover-ups",
+    "COINTELPRO and FBI surveillance of civil rights leaders",
     "the origins of COVID-19 and lab leak theories",
     "Hunter Biden's laptop and the suppression of the story",
-    "the assassination of JFK — suspects, theories, and cover-ups",
-    "the assassination of MLK and government involvement theories",
-    "COINTELPRO and FBI surveillance of civil rights leaders",
 ]
 
 DEGEN_CATEGORIES = [
+    # Personality-driven — Alex Jones, Candace Owens, Tucker, RFK etc.
+    "Alex Jones and his most unhinged claims — InfoWars, water turning frogs gay, Sandy Hook",
+    "Alex Jones predictions and rants that somehow came partially true",
+    "Candace Owens and her takes on Pepstein, the elites, and the black community",
+    "Candace Owens vs the mainstream — her most controversial public statements",
+    "Tucker Carlson's conspiracy-adjacent segments and what he implied without saying",
+    "RFK Jr and his vaccine conspiracy theories and what he actually claimed",
+    "Joe Rogan's most unhinged podcast guests and what they said on air",
+    "Andrew Tate's claims about the matrix, the elite, and why he got arrested",
+    "Elon Musk's conspiracy theory tweets and what he was implying",
+    # QAnon and deep state
     "QAnon — the deep state, the storm, adrenochrome, and the great awakening",
+    "QAnon drops — specific predictions Q made and what actually happened",
+    "the deep state — shadow government bureaucrats running everything from basements",
+    "adrenochrome harvesting — elites drinking child blood for immortality and youth",
+    # Classic degen
     "reptilian elites — world leaders secretly being lizard people in human suits",
-    "the Illuminati and their control of pop culture, music, and politics",
+    "the Illuminati and their control of pop culture, music videos, and politics",
     "chemtrails and government weather modification programs like HAARP",
-    "the moon landing being faked by Stanley Kubrick on a film set",
-    "flat earth theory — the ice wall, NASA lies, and the dome",
+    "the moon landing being faked by Stanley Kubrick on a film set in Nevada",
+    "flat earth theory — the ice wall, NASA lies, and the dome above us",
     "Bill Gates microchipping people through COVID vaccines and 5G activation",
     "the Great Reset and Klaus Schwab's plan for you to own nothing and be happy",
-    "Candace Owens, TPUSA, and culture war grift conspiracies",
     "crisis actors and false flag operations like Sandy Hook or the Boston bombing",
-    "5G towers causing COVID, mind control signals, and bird deaths",
-    "the Denver Airport — murals, underground bunkers, and the New World Order",
-    "the Bohemian Grove — elite rituals, owl worship, and world leaders in the woods",
-    "we are living in a simulation and reality is a holographic construct",
+    "5G towers causing COVID, mind control signals, and killing birds",
+    "the Denver Airport — murals, underground bunkers, gargoyles, and the New World Order",
+    "the Bohemian Grove — elite rituals, owl worship, and world leaders in robes",
     "the Mandela Effect — parallel universes, timeline shifts, and the Berenstain Bears",
-    "celebrities who are secretly clones, replaced, or under MK Ultra control",
-    "adrenochrome harvesting — elites drinking child blood for immortality",
-    "George Soros funding every protest, revolution, and political movement on earth",
-    "the deep state — shadow government bureaucrats running everything from basements",
-    "Paul McCartney died in 1966 and was replaced by a lookalike",
-    "Tupac and Biggie were killed by the government or Death Row Records",
-    "Princess Diana was assassinated by the British royal family",
-    "the Freemasons and their control of governments, courts, and architecture",
-    "birds are not real — they are government surveillance drones",
-    "Hollywood satanism — secret rituals, sacrifices, and the 27 club",
-    "the New World Order — one world government, chips, and population control",
-    "alien disclosure — what governments are hiding about UFOs and Roswell",
-    "the Philadelphia Experiment — time travel, invisibility, and Navy cover-ups",
+    "celebrities who are secretly clones, replaced, or MK Ultra mind control victims",
+    "George Soros funding every protest, revolution, and colour revolution on earth",
+    "Paul McCartney died in 1966 and was replaced by a lookalike named Billy Shears",
+    "Tupac and Biggie were killed by the government, Death Row, or the LAPD",
+    "Princess Diana was assassinated by MI6 on orders from the royal family",
+    "birds are not real — the Peter McIndoe movement and government drone surveillance",
+    "Hollywood satanism — secret rituals, the 27 club, and what happens at the Chateau Marmont",
+    "alien disclosure — what the Pentagon UFO files actually say and what they're hiding",
+    "Jesse Ventura's conspiracy theory investigations and what he uncovered",
+    "David Icke's most unhinged claims about lizards, Saturn, and the moon matrix",
 ]
 
 PEPSTEIN_SYSTEM_PROMPT = (
@@ -108,35 +117,35 @@ _KEYWORD_BLACKLIST = {
 _DIFFICULTY_RULES = {
     "easy": (
         "\n\nDIFFICULTY: EASY\n"
-        "Answer length: 1 sentence, 15-25 words. Short and punchy.\n"
-        "Keywords: 2-3. Use well-known names that most people would recognise "
-        "(Trump, Clinton, Maxwell, Gates, etc.) plus one specific fact like a year or place.\n"
-        "The answer should be guessable by someone with passing knowledge of the topic.\n"
-        "Example easy answer: 'The Ohio billionaire and L Brands CEO handed Pepstein "
-        "a $1 billion fortune and asked zero questions.'\n"
-        "Keywords for that: Les Wexner, Ohio, L Brands"
+        "Answer length: 1-2 sentences, 20-35 words.\n"
+        "Keywords: 2-3. Use well-known names and one obvious fact. "
+        "The answer should be guessable by anyone who casually follows news or pop culture — "
+        "think pub quiz level, not research level.\n"
+        "The question should hint at the general topic without giving away the answer word-for-word.\n"
+        "Good easy topics: Trump, Clinton, Maxwell, Gates, Prince Andrew, Alex Jones claims, "
+        "QAnon basics, famous conspiracy names, obvious Epstein connections.\n"
+        "Example: Q: 'What talk show host made millions telling people to distrust vaccines?' "
+        "A: 'The InfoWars host and radio personality claimed the government was poisoning the water supply.' "
+        "Keywords: Alex Jones, InfoWars"
     ),
     "medium": (
         "\n\nDIFFICULTY: MEDIUM\n"
         "Answer length: 2 sentences, 30-50 words.\n"
-        "Keywords: 3-4. Mix of well-known names and at least one specific detail "
-        "(a year, a location, an organisation, a lesser-known name) that requires "
-        "actual knowledge to get.\n"
-        "The answer should be gettable by someone who follows the news closely "
-        "but not by a complete outsider.\n"
-        "Do NOT make the question so specific it gives away the answer — "
-        "ask broadly, answer specifically."
+        "Keywords: 3. Mix of recognisable names and one detail that requires "
+        "actual knowledge — a year, a location, an org, or a lesser-known associate.\n"
+        "Guessable by someone who follows this stuff casually but needs to think about it.\n"
+        "The question should be interesting and not telegraph the answer.\n"
+        "Do NOT use hyper-obscure facts — medium should feel satisfying to get, not impossible."
     ),
     "hard": (
         "\n\nDIFFICULTY: HARD\n"
-        "Answer length: 2-3 sentences, 40-70 words.\n"
-        "Keywords: 4-5. Include obscure names, specific years, dollar amounts, "
-        "locations, or technical terms that require deep knowledge of the topic.\n"
-        "The answer should stump someone who follows the news — "
-        "requires genuine research knowledge or a very good memory.\n"
-        "Go for the deep cuts: lesser-known associates, specific dates, "
-        "shell company names, classified program names, etc.\n"
-        "Do NOT make the question give away the answer."
+        "Answer length: 2-3 sentences, 40-65 words.\n"
+        "Keywords: 3-4. Go for specific details that require genuine knowledge: "
+        "lesser-known associates, specific dollar amounts, dates, shell company names, "
+        "classified program names, specific locations, or obscure but real facts.\n"
+        "Hard should stump most people but feel fair — the clues should be in the answer, "
+        "the knowledge gap is the challenge.\n"
+        "Do NOT make it so obscure that even a researcher would struggle."
     ),
 }
 
@@ -189,7 +198,7 @@ def generate_trivia() -> tuple:
     """
     import random
 
-    pool = random.choices(["grounded", "degen"], weights=[65, 35], k=1)[0]
+    pool = random.choices(["grounded", "degen"], weights=[50, 50], k=1)[0]
     category = random.choice(GROUNDED_CATEGORIES if pool == "grounded" else DEGEN_CATEGORIES)
     difficulty = _pick_difficulty()
     diff_rule = _DIFFICULTY_RULES[difficulty]
