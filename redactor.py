@@ -10,78 +10,83 @@ client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # --------------------
 # CATEGORY POOLS
 #
-# Two pools — grounded and unhinged.
-# 50% grounded (Epstein-adjacent real events), 50% degen conspiracy.
+# Two pools — grounded and degen.
+# Grounded categories are weighted higher to keep Pepstein/Epstein
+# as the dominant theme. Conspiracy categories add variety without
+# taking over the identity of the game.
+#
+# Pool selection: 55% grounded, 45% degen.
+# Within grounded, Epstein-specific entries are repeated to increase
+# their relative weight — roughly half of all questions will be
+# Pepstein-adjacent.
 # --------------------
 
 GROUNDED_CATEGORIES = [
-    # Pepstein/Epstein — core content, multiple entries to increase weight
+    # Pepstein core — duplicated entries = higher probability
     "Jeffrey Epstein's associates, clients, or connections (always call him Pepstein)",
-    "Jeffrey Epstein's travel companions on the manifest (always call him Pepstein)",
+    "Jeffrey Epstein's associates, clients, or connections (always call him Pepstein)",
+    "Jeffrey Epstein's travel companions listed on the manifest (always call him Pepstein)",
     "Jeffrey Epstein's properties, the island, and what allegedly happened there (always call him Pepstein)",
+    "Ghislaine Maxwell — her background, her role, her trial, her sentence",
     "Ghislaine Maxwell — her background, her role, her trial, her sentence",
     "Les Wexner and his financial relationship with Pepstein",
     "Virginia Giuffre and her lawsuit against Prince Andrew",
+    "Prince Andrew and his connection to Pepstein and Maxwell",
     # Other real scandals
-    "Donald Trump and his connections to powerful people or controversies",
-    "Bill Clinton and his connections to powerful people or controversies",
-    "Prince Andrew and his controversies",
-    "powerful billionaires and their private islands or yachts",
-    "famous conspiracy theories that turned out to be true",
+    "Donald Trump and his known connections to Pepstein or other powerful controversies",
+    "Bill Clinton and his known connections to Pepstein or other powerful controversies",
+    "powerful billionaires and their private islands, yachts, or secret gatherings",
+    "famous conspiracy theories that actually turned out to be true",
     "offshore finance, shell companies, or tax havens used by the ultra-wealthy",
-    "sealed court documents or classified government files",
-    "the CIA, FBI, or intelligence agencies and their controversies",
-    "famous people who died under suspicious circumstances and why it seems fishy",
+    "sealed court documents or classified government files that were later exposed",
+    "the CIA, FBI, or intelligence agencies and their documented controversies",
+    "famous people who died under suspicious circumstances",
     "global elite gatherings like Davos, Bilderberg, or the World Economic Forum",
-    "dark money in politics and super PACs",
     "MKUltra and CIA mind control experiments",
-    "Operation Paperclip and Nazi scientists brought to the US",
+    "Operation Paperclip and Nazi scientists brought to the US after WW2",
     "the Panama Papers or Pandora Papers offshore leaks",
-    "the assassination of JFK — suspects, theories, and cover-ups",
+    "the assassination of JFK — suspects, theories, and what the files say",
     "COINTELPRO and FBI surveillance of civil rights leaders",
-    "the origins of COVID-19 and lab leak theories",
-    "Hunter Biden's laptop and the suppression of the story",
+    "the origins of COVID-19 and the lab leak theory",
 ]
 
 DEGEN_CATEGORIES = [
-    # Personality-driven — Alex Jones, Candace Owens, Tucker, RFK etc.
-    "Alex Jones and his most unhinged claims — InfoWars, water turning frogs gay, Sandy Hook",
-    "Alex Jones predictions and rants that somehow came partially true",
-    "Candace Owens and her takes on Pepstein, the elites, and the black community",
-    "Candace Owens vs the mainstream — her most controversial public statements",
-    "Tucker Carlson's conspiracy-adjacent segments and what he implied without saying",
-    "RFK Jr and his vaccine conspiracy theories and what he actually claimed",
-    "Joe Rogan's most unhinged podcast guests and what they said on air",
-    "Andrew Tate's claims about the matrix, the elite, and why he got arrested",
-    "Elon Musk's conspiracy theory tweets and what he was implying",
-    # QAnon and deep state
+    # Personality-driven — the most entertaining category
+    "Alex Jones and his most unhinged claims — InfoWars, frogs turning gay, Sandy Hook denial",
+    "Alex Jones predictions that somehow came partially true",
+    "Candace Owens and her most controversial takes on elites, Pepstein, and race",
+    "Tucker Carlson's conspiracy-adjacent segments — what he implied without saying outright",
+    "RFK Jr and his anti-vaccine claims and what he actually said publicly",
+    "Joe Rogan's most unhinged podcast moments and guests",
+    "Andrew Tate's claims about the matrix, the elite, and his arrest in Romania",
+    "Elon Musk's most conspiracy-adjacent tweets and what he was implying",
+    "David Icke's claims about reptilian elites, Saturn, and the moon matrix",
+    "Jesse Ventura's conspiracy investigations and what he claimed to uncover",
+    # QAnon universe
     "QAnon — the deep state, the storm, adrenochrome, and the great awakening",
-    "QAnon drops — specific predictions Q made and what actually happened",
-    "the deep state — shadow government bureaucrats running everything from basements",
-    "adrenochrome harvesting — elites drinking child blood for immortality and youth",
-    # Classic degen
-    "reptilian elites — world leaders secretly being lizard people in human suits",
-    "the Illuminati and their control of pop culture, music videos, and politics",
+    "QAnon predictions that Q made and what actually happened",
+    "adrenochrome harvesting — the elite supposedly drinking child blood for immortality",
+    "the deep state — shadow government operatives running everything from underground",
+    # Classic conspiracy
+    "reptilian elites — world leaders secretly being lizard people",
+    "the Illuminati and their control of pop culture, music, and politics",
     "chemtrails and government weather modification programs like HAARP",
-    "the moon landing being faked by Stanley Kubrick on a film set in Nevada",
-    "flat earth theory — the ice wall, NASA lies, and the dome above us",
-    "Bill Gates microchipping people through COVID vaccines and 5G activation",
-    "the Great Reset and Klaus Schwab's plan for you to own nothing and be happy",
-    "crisis actors and false flag operations like Sandy Hook or the Boston bombing",
-    "5G towers causing COVID, mind control signals, and killing birds",
-    "the Denver Airport — murals, underground bunkers, gargoyles, and the New World Order",
-    "the Bohemian Grove — elite rituals, owl worship, and world leaders in robes",
-    "the Mandela Effect — parallel universes, timeline shifts, and the Berenstain Bears",
-    "celebrities who are secretly clones, replaced, or MK Ultra mind control victims",
-    "George Soros funding every protest, revolution, and colour revolution on earth",
+    "the moon landing being faked by Stanley Kubrick on a Nevada film set",
+    "flat earth theory — the ice wall, NASA lies, and the dome above us all",
+    "Bill Gates microchipping people through COVID vaccines and 5G towers",
+    "the Great Reset and Klaus Schwab's plan for you to own nothing",
+    "crisis actors and false flag operations like Sandy Hook or the Boston Marathon",
+    "the Denver Airport — murals, underground bunkers, gargoyles, New World Order symbolism",
+    "the Bohemian Grove — elite rituals, owl worship, world leaders in the woods",
+    "the Mandela Effect — parallel universes and timeline glitches like the Berenstain Bears",
+    "celebrities who are secretly clones or MK Ultra mind control victims",
+    "George Soros funding every protest and colour revolution on earth",
     "Paul McCartney died in 1966 and was replaced by a lookalike named Billy Shears",
-    "Tupac and Biggie were killed by the government, Death Row, or the LAPD",
-    "Princess Diana was assassinated by MI6 on orders from the royal family",
+    "Tupac and Biggie were killed by the government, Death Row Records, or the LAPD",
+    "Princess Diana was assassinated by MI6 on orders from the British royal family",
     "birds are not real — the Peter McIndoe movement and government drone surveillance",
-    "Hollywood satanism — secret rituals, the 27 club, and what happens at the Chateau Marmont",
-    "alien disclosure — what the Pentagon UFO files actually say and what they're hiding",
-    "Jesse Ventura's conspiracy theory investigations and what he uncovered",
-    "David Icke's most unhinged claims about lizards, Saturn, and the moon matrix",
+    "Hollywood satanism — secret rituals, the 27 club, the Chateau Marmont",
+    "alien disclosure — what the Pentagon UFO files say and what governments are hiding",
 ]
 
 PEPSTEIN_SYSTEM_PROMPT = (
@@ -116,59 +121,71 @@ _KEYWORD_BLACKLIST = {
     "type", "form", "number", "year", "years",
 }
 
-# Difficulty-specific instructions injected into the prompt
+# Per-difficulty prompt instructions — baked in at generation time
+# so the model writes the right length and keyword count from the start
 _DIFFICULTY_RULES = {
     "easy": (
         "\n\nDIFFICULTY: EASY\n"
         "Answer length: 1-2 sentences, 20-35 words.\n"
-        "Keywords: 2-3. Use well-known names and one obvious fact. "
-        "The answer should be guessable by anyone who casually follows news or pop culture — "
-        "think pub quiz level, not research level.\n"
-        "The question should hint at the general topic without giving away the answer word-for-word.\n"
-        "Good easy topics: Trump, Clinton, Maxwell, Gates, Prince Andrew, Alex Jones claims, "
-        "QAnon basics, famous conspiracy names, obvious Epstein connections.\n"
-        "Example: Q: 'What talk show host made millions telling people to distrust vaccines?' "
-        "A: 'The InfoWars host and radio personality claimed the government was poisoning the water supply.' "
-        "Keywords: Alex Jones, InfoWars"
+        "Keywords: exactly 2. Must be well-known names or obvious facts.\n"
+        "Target audience: someone who casually follows news or pop culture — pub quiz level.\n"
+        "The question hints at the topic but does NOT give away the answer.\n"
+        "Good easy subjects: Trump, Clinton, Maxwell, Gates, Prince Andrew, "
+        "Alex Jones, QAnon basics, well-known Epstein connections, famous conspiracy figures.\n"
+        "EXAMPLE:\n"
+        "Q: What conspiracy media personality built a career claiming the government "
+        "was putting chemicals in the water supply?\n"
+        "A: The InfoWars founder and radio host has been selling supplements and "
+        "screaming about frogs for decades.\n"
+        "KEYWORDS: Alex Jones, InfoWars\n"
+        "Notice: the question doesn't say his name, the answer gives his role as a clue."
     ),
     "medium": (
         "\n\nDIFFICULTY: MEDIUM\n"
-        "Answer length: 2 sentences, 30-50 words.\n"
-        "Keywords: 3. Mix of recognisable names and one detail that requires "
-        "actual knowledge — a year, a location, an org, or a lesser-known associate.\n"
-        "Guessable by someone who follows this stuff casually but needs to think about it.\n"
-        "The question should be interesting and not telegraph the answer.\n"
-        "Do NOT use hyper-obscure facts — medium should feel satisfying to get, not impossible."
+        "Answer length: 2 sentences, 35-55 words.\n"
+        "Keywords: exactly 3. At least one must require real knowledge to get "
+        "(a year, a location, an organisation name, or a less-famous associate).\n"
+        "Target audience: someone who follows this stuff but has to actually think about it.\n"
+        "The question must NOT telegraph the answer — ask obliquely, answer specifically.\n"
+        "Medium should feel satisfying to get right, not impossible.\n"
+        "EXAMPLE:\n"
+        "Q: What British socialite ran Pepstein's recruitment operation before her arrest?\n"
+        "A: The daughter of media mogul Robert Maxwell managed Pepstein's network "
+        "for decades before being arrested in 2020 and sentenced in 2021.\n"
+        "KEYWORDS: Ghislaine Maxwell, 2020, Robert Maxwell"
     ),
     "hard": (
         "\n\nDIFFICULTY: HARD\n"
-        "Answer length: 2-3 sentences, 40-65 words.\n"
-        "Keywords: 3-4. Go for specific details that require genuine knowledge: "
-        "lesser-known associates, specific dollar amounts, dates, shell company names, "
-        "classified program names, specific locations, or obscure but real facts.\n"
-        "Hard should stump most people but feel fair — the clues should be in the answer, "
-        "the knowledge gap is the challenge.\n"
-        "Do NOT make it so obscure that even a researcher would struggle."
+        "Answer length: 2-3 sentences, 45-70 words.\n"
+        "Keywords: exactly 3-4. Must include at least one genuinely obscure fact: "
+        "a lesser-known associate, a specific dollar figure, a shell company name, "
+        "a classified program name, a specific date, or a deep-cut location.\n"
+        "Target audience: someone with genuine research knowledge of the topic.\n"
+        "Hard should be challenging but FAIR — clues must be present in the answer text.\n"
+        "The knowledge gap is the challenge, not unfair obscurity.\n"
+        "Do NOT make it so obscure that a dedicated researcher would struggle."
     ),
 }
 
 _KEYWORD_RULE = (
-    "\n\nKEYWORD RULES:\n"
-    "- Only proper names, years, numbers, organisations, or specific technical terms\n"
-    "- Never generic words like 'known', 'used', 'called', 'world', 'people'\n"
-    "- Keywords must be the specific words that PROVE someone knows the answer\n"
-    "- Each keyword MUST appear verbatim in your answer text\n"
-    "- If you redact a name, include their role/relationship in the answer as a clue\n"
-    "  Example: redact 'Alan Dershowitz', write 'the Harvard defense attorney' as context\n"
-    "- NEVER redact a word and leave zero context clues about what it is\n"
-    "- NEVER make the question text reveal the answer directly\n"
-    "  Bad: 'What billionaire gave Pepstein his fortune?' then answer 'Les Wexner gave him money'\n"
-    "  Good: 'What Ohio tycoon became Pepstein's mysterious financial patron?' "
-    "then answer 'The retail magnate behind Victoria's Secret wired him $1 billion.'"
+    "\n\nKEYWORD RULES — FOLLOW EXACTLY:\n"
+    "1. Keywords must be proper names, years, numbers, org names, or specific technical terms\n"
+    "2. Every keyword MUST appear verbatim (or very close) in your answer text — "
+    "if the word isn't in the answer, do NOT list it as a keyword\n"
+    "3. Never use generic words: 'known', 'used', 'called', 'world', 'people', 'government'\n"
+    "4. If you redact a name, your answer MUST include their role or relationship as a clue\n"
+    "   BAD: '[redacted] was on the manifest' — zero context\n"
+    "   GOOD: 'The Harvard defense attorney was on the manifest' — guessable\n"
+    "5. The question must NOT contain the answer — ask about the topic obliquely\n"
+    "   BAD: Q: 'What did Les Wexner do for Pepstein?' A: 'Les Wexner gave him money'\n"
+    "   GOOD: Q: 'What Ohio retail mogul became Pepstein's mysterious patron?' "
+    "A: 'The Victoria's Secret founder wired him $1 billion in the early 1990s'\n"
+    "6. Aim for the keyword count specified in your difficulty instructions — not more, not less"
 )
 
 
 def _clean_keywords(keywords: list) -> list:
+    """Filter blacklisted/short keywords, deduplicate, preserve order."""
     seen = set()
     cleaned = []
     for k in keywords:
@@ -180,6 +197,7 @@ def _clean_keywords(keywords: list) -> list:
 
 
 def _sub_epstein(text: str) -> str:
+    """Always replace Epstein with Pepstein."""
     text = re.sub(r'jeffrey epstein', 'Pepstein', text, flags=re.IGNORECASE)
     text = re.sub(r'\bepstein\b', 'Pepstein', text, flags=re.IGNORECASE)
     return text
@@ -193,15 +211,15 @@ def _pick_difficulty() -> str:
 
 def generate_trivia() -> tuple:
     """
-    Pepstein generates its own question and answer.
-    65% grounded (real events), 35% degen conspiracy.
+    Pull a file from the vault.
+    55% grounded (Pepstein-adjacent real events), 45% degen conspiracy.
     Difficulty is pre-selected and baked into the prompt so the model
     writes an appropriately sized answer from the start.
     Returns (question, answer, keywords, difficulty).
     """
     import random
 
-    pool = random.choices(["grounded", "degen"], weights=[50, 50], k=1)[0]
+    pool = random.choices(["grounded", "degen"], weights=[55, 45], k=1)[0]
     category = random.choice(GROUNDED_CATEGORIES if pool == "grounded" else DEGEN_CATEGORIES)
     difficulty = _pick_difficulty()
     diff_rule = _DIFFICULTY_RULES[difficulty]
@@ -216,22 +234,17 @@ def generate_trivia() -> tuple:
                         f"{PEPSTEIN_SYSTEM_PROMPT}"
                         f"{diff_rule}"
                         f"{_KEYWORD_RULE}\n\n"
-                        f"Generate one trivia question and answer about: {category}.\n\n"
-                        "Rules:\n"
-                        "- Question must be answerable and NOT give away the answer\n"
-                        "- Answer: match the length and keyword count for your difficulty level\n"
-                        "- Darkly funny, sardonic tone — but specific and factual\n"
-                        "- For conspiracy topics: play it completely straight and deadpan\n\n"
-                        "Format EXACTLY:\n"
+                        f"Generate one question and answer about: {category}.\n\n"
+                        "Format EXACTLY — no extra text before or after:\n"
                         "QUESTION: your question here\n"
                         "ANSWER: your answer here\n"
                         "KEYWORDS: word1, word2, word3"
                     )
                 },
-                {"role": "user", "content": "Generate a trivia question."}
+                {"role": "user", "content": "Open a file."}
             ],
             max_tokens=300,
-            temperature=0.95,
+            temperature=0.92,
         )
 
         full_text = response.choices[0].message.content.strip()
@@ -256,7 +269,6 @@ def generate_trivia() -> tuple:
         if not question or not answer:
             return _fallback_trivia()
 
-        # Return difficulty so bot.py can use it directly instead of inferring
         return question, answer, keywords, difficulty
 
     except Exception as e:
@@ -266,11 +278,11 @@ def generate_trivia() -> tuple:
 
 def _fallback_trivia():
     return (
-        "What Ohio retail billionaire became Pepstein's primary financial backer?",
-        "The Victoria's Secret mogul handed Pepstein a $1 billion fortune in the early 1990s "
+        "What Ohio retail billionaire became Pepstein's mysterious financial patron in the 1990s?",
+        "The Victoria's Secret founder handed Pepstein a $1 billion fortune in the early 1990s "
         "and somehow forgot to ask what it was for.",
-        ["Les Wexner", "Victoria's Secret", "1990s"],
-        "medium"
+        ["Les Wexner", "Victoria's Secret"],
+        "easy"
     )
 
 
@@ -285,11 +297,12 @@ def get_answer(question: str) -> tuple:
                     "content": (
                         f"{PEPSTEIN_SYSTEM_PROMPT}"
                         f"{_KEYWORD_RULE}\n\n"
-                        "Answer in 2-3 sentences, 30-60 words. "
+                        "Answer in 2-3 sentences, 35-60 words. "
                         "Darkly satirical, burned-asset energy. Accurate first, sardonic second.\n"
-                        "Include specific names, dates, and facts — make it worth redacting.\n"
-                        "Do NOT let the answer be a one-liner with a single obvious keyword.\n\n"
-                        "After your answer write: KEYWORDS: followed by 3-5 key words/phrases.\n\n"
+                        "Include specific names, dates, and facts that are worth redacting.\n"
+                        "The answer must have enough specific content to make a good puzzle — "
+                        "at least 3 guessable keywords.\n\n"
+                        "After your answer write KEYWORDS: followed by 3-4 key words/phrases.\n\n"
                         "Format:\n"
                         "Your answer here.\n"
                         "KEYWORDS: word1, word2, word3"
@@ -326,6 +339,7 @@ def get_answer(question: str) -> tuple:
 
 
 def _extract_keywords_fallback(text: str) -> list:
+    """Last resort — years, capitalised proper nouns, long words."""
     numbers = re.findall(r'\b\d{4}\b', text)
     cap_words = re.findall(r'(?<![.!?]\s)\b[A-Z][a-z]{2,}\b', text)
     long_words = re.findall(r'\b[A-Za-z]{7,}\b', text)
@@ -336,15 +350,20 @@ def _extract_keywords_fallback(text: str) -> list:
 def redact_answer(answer: str, keywords: list) -> str:
     """
     Replace each keyword with a ▓ block scaled to keyword length.
-    Tries flexible separator match, then exact match, then surname fallback.
-    Longest keywords matched first.
+
+    Three strategies per keyword, tried in order:
+      1. Flexible separator match — handles Mar-A-Lago / Mar A Lago / mar-a-lago
+      2. Exact case-insensitive match
+      3. Surname-only fallback — keyword "Bill Clinton", answer only has "Clinton"
+
+    Sorted longest-first so multi-word phrases are caught before their parts.
     """
     redacted = answer
     for keyword in sorted(keywords, key=len, reverse=True):
         normalized = re.sub(r'\s+', ' ', keyword.strip())
         block = "▓" * len(normalized)
 
-        # Strategy 1: flexible separator (handles Mar-A-Lago / Mar A Lago)
+        # Strategy 1: flexible separator
         tokens = [re.escape(t) for t in re.split(r'[\s\-_]+', normalized)]
         flexible = r'[\s\-_]+'.join(tokens)
         new_redacted = re.sub(flexible, block, redacted, flags=re.IGNORECASE)

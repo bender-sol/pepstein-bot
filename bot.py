@@ -57,12 +57,11 @@ logger = logging.getLogger(__name__)
 # DIFFICULTY CONFIG
 #
 # Timer philosophy: the timer exists to prevent stall, not to add pressure.
-# Harder questions need more time because they take longer to work through,
-# not because we want to punish players.
+# Harder questions need more time because they take longer to work through.
 #
-# Easy   — common knowledge, single well-known name/date. 90s is plenty.
-# Medium — requires some background knowledge, 2-3 keywords. 3 min is fair.
-# Hard   — obscure figures, specific numbers, multi-part answers. 5 min.
+# Easy   — well-known names, pub quiz level. 90s is plenty.
+# Medium — requires some real knowledge. 3 min is fair.
+# Hard   — specific facts, obscure details. 5 min to work through it.
 # --------------------
 DIFFICULTY = {
     "easy":   {"label": "🟢 EASY",   "points": 5,  "timer": 90},
@@ -205,11 +204,15 @@ def _extract_numbers(answer: str) -> list:
 
 
 def _is_numeric_keyword(keyword: str) -> bool:
-    """True if keyword is a number/year/date that must be matched exactly."""
     return bool(re.match(r'^\d', keyword.strip()))
 
 
 def refine_keywords(answer: str, keywords: list) -> list:
+    """
+    Filter and prioritise keywords from the model's list.
+    Tiers: numbers > multi-word phrases (≤3 words) > proper nouns > long words > fallback.
+    Hard minimum of 2, soft cap of 6.
+    """
     seen = set()
     words = []
     for w in keywords:
@@ -220,7 +223,7 @@ def refine_keywords(answer: str, keywords: list) -> list:
 
     numbers = _extract_numbers(answer)
     tier1 = [n for n in numbers if n not in seen]
-    # Cap at 3 words — longer phrases are descriptions, not guessable keywords
+    # Cap multi-word phrases at 3 words — longer = description, not a keyword
     tier2 = [w for w in words if 1 < len(w.split()) <= 3]
     tier3 = [
         w for w in words
@@ -248,10 +251,11 @@ def refine_keywords(answer: str, keywords: list) -> list:
         if w not in final:
             final.append(w)
 
-    if len(final) < 3:
+    # Safety net — mine answer text if model returned too few usable keywords
+    if len(final) < 2:
         answer_words = [w.strip(".,;:()[]\"'") for w in answer.split()]
         for w in answer_words:
-            if len(final) >= 3:
+            if len(final) >= 2:
                 break
             key = w.lower()
             if (
@@ -265,18 +269,24 @@ def refine_keywords(answer: str, keywords: list) -> list:
     return final
 
 
+def trim_keywords_to_difficulty(keywords: list, difficulty: str) -> list:
+    """
+    Trim keyword list to match difficulty.
+    Easy: 2 words (very guessable), Medium: 3 words, Hard: 4 words.
+    Keeps highest-priority keywords (front of list, already sorted by tier).
+    """
+    limits = {"easy": 2, "medium": 3, "hard": 4}
+    floors = {"easy": 2, "medium": 2, "hard": 3}
+    limit = limits.get(difficulty, 3)
+    floor = floors.get(difficulty, 2)
+    trimmed = keywords[:limit]
+    return trimmed if len(trimmed) >= floor else keywords[:floor]
+
+
 def infer_difficulty(keywords: list) -> str:
     """
-    Weighted random assignment: 40% easy, 40% medium, 20% hard.
-
-    The content (Epstein-adjacent trivia with multiple names/dates in every answer)
-    makes heuristic difficulty detection unreliable — almost everything scores as hard.
-    Weighted random guarantees the target distribution regardless of keyword count.
-
-    The number of keywords to redact is then scaled to match the assigned difficulty:
-    - Easy:   redact 2-3 keywords
-    - Medium: redact 3-4 keywords
-    - Hard:   redact 4-6 keywords
+    Weighted random: 40% easy, 40% medium, 20% hard.
+    Used as fallback when redactor doesn't supply a preset difficulty (/ask command).
     """
     import random
     return random.choices(
@@ -284,20 +294,6 @@ def infer_difficulty(keywords: list) -> str:
         weights=[40, 40, 20],
         k=1
     )[0]
-
-
-def trim_keywords_to_difficulty(keywords: list, difficulty: str) -> list:
-    """
-    Trim the keyword list to an appropriate length for the assigned difficulty.
-    Always keeps the highest-priority keywords (front of list, already sorted by tier).
-    """
-    limits = {"easy": 3, "medium": 4, "hard": 6}
-    floors = {"easy": 2, "medium": 3, "hard": 4}
-    limit = limits.get(difficulty, 4)
-    floor = floors.get(difficulty, 2)
-    trimmed = keywords[:limit]
-    # Ensure minimum — shouldn't happen but safety net
-    return trimmed if len(trimmed) >= floor else keywords[:floor]
 
 
 # --------------------
@@ -321,28 +317,24 @@ def _start_timer(context, chat_id, message_id, duration):
 # END ROUND HELPER
 # --------------------
 async def _end_round(context, chat_id, game, reason="revealed"):
-    """Shared teardown. Returns (flavour_line, full_answer)."""
     _cancel_timer(context)
     clear_active_game(chat_id)
     await unpin_message(context, chat_id)
 
     if reason == "forced":
-        flavour = "_File closed. The Pepstein Files do not negotiate._"
+        return "_File closed. The Pepstein Files do not negotiate._"
     elif reason == "revealed":
-        flavour = "_Now you know. Act accordingly._"
+        return "_Now you know. Act accordingly._"
     elif reason == "solved":
-        flavour = "_File cracked. The vault has been compromised._"
+        return "_File cracked. The vault has been compromised._"
     else:
-        flavour = "_The file has been closed._"
-
-    return flavour
+        return "_The file has been closed._"
 
 
 # --------------------
 # GUESS MATCHING
 # --------------------
 def normalize(text: str) -> str:
-    # Normalize separators — hyphens, dashes, underscores treated as spaces
     text = re.sub(r'[-_]', ' ', text)
     return text.lower().strip()
 
@@ -352,9 +344,6 @@ def similarity(a, b):
 
 
 def fuzzy_match(guess: str, keyword: str) -> bool:
-    """
-    Fuzzy match for text keywords. Numbers/dates must be exact — handled separately.
-    """
     guess_n = normalize(guess)
     keyword_n = normalize(keyword)
 
@@ -365,16 +354,15 @@ def fuzzy_match(guess: str, keyword: str) -> bool:
     guess_clean = " ".join(guess_tokens)
     keyword_clean = " ".join(keyword_tokens)
 
-    # Substring match — handles partial names ("Clinton" matching "Bill Clinton")
+    # Substring — handles partial names ("Clinton" matching "Bill Clinton")
     if keyword_clean in guess_clean or guess_clean in keyword_clean:
         return True
 
-    # Fuzzy similarity — handles typos, slight misspellings
+    # Fuzzy similarity — handles typos
     if similarity(guess_clean, keyword_clean) > 0.80:
         return True
 
-    # Token-level match — any single token of the keyword found in guess
-    # e.g. "lago" matching "Mar-A-Lago" after normalization
+    # Token-level — any single meaningful token found in guess
     for token in keyword_tokens:
         if len(token) > 2 and token in guess_tokens:
             return True
@@ -386,11 +374,10 @@ def check_guess_flexible(guess: str, keywords: list) -> list:
     matched = []
     for k in keywords:
         if _is_numeric_keyword(k):
-            # Numbers and dates: exact match only (strip whitespace, normalize separators)
+            # Numbers and dates: exact match only
             if normalize(guess).replace(" ", "") == normalize(k).replace(" ", ""):
                 matched.append(k)
         else:
-            # Text: fuzzy match against full keyword and individual parts
             parts = k.split()
             if fuzzy_match(guess, k) or any(fuzzy_match(guess, p) for p in parts if len(p) > 2):
                 matched.append(k)
@@ -404,27 +391,25 @@ async def _launch_round(update, context, question, answer, keywords, label="CLAS
     chat_id = update.effective_chat.id
 
     keywords = refine_keywords(answer, keywords)
-    # Use pre-set difficulty from redactor if provided (baked into the prompt).
-    # Fall back to inference for /ask which doesn't pre-set difficulty.
+
+    # Use difficulty from redactor prompt if available, otherwise infer
     if preset_difficulty and preset_difficulty in DIFFICULTY:
         difficulty = preset_difficulty
-        keywords = trim_keywords_to_difficulty(keywords, difficulty)
     else:
         difficulty = infer_difficulty(keywords)
-        keywords = trim_keywords_to_difficulty(keywords, difficulty)
+
+    keywords = trim_keywords_to_difficulty(keywords, difficulty)
     logger.info("DIFFICULTY: %s | KEYWORDS for chat %s: %s", difficulty, chat_id, keywords)
 
     redacted = redact_answer(answer, keywords)
-    logger.info("REDACTED result for chat %s: %s", chat_id, redacted)
+    logger.info("REDACTED for chat %s: %s", chat_id, redacted)
 
-    # Only count keywords that were actually found and redacted in the answer text.
-    # Phantom keywords (not present in the answer) are silently dropped so the
-    # round can never get stuck waiting for an unguessable word.
+    # Only store keywords that are actually visible in the redacted text
+    # — prevents phantom keywords that can never be guessed
     active_keywords = [k for k in keywords if "▓" in redact_answer(answer, [k])]
     if not active_keywords:
-        # Fallback — nothing redacted at all, use full list so game still launches
         active_keywords = keywords
-    logger.info("ACTIVE KEYWORDS (matched in answer) for chat %s: %s", chat_id, active_keywords)
+    logger.info("ACTIVE KEYWORDS for chat %s: %s", chat_id, active_keywords)
 
     d = DIFFICULTY[difficulty]
     total = len(active_keywords)
@@ -460,7 +445,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "You have been connected to a classified document reconstruction system.\n"
         "Critical words have been redacted. Your job is to recover them.\n\n"
         "🎮 *COMMANDS:*\n"
-        "• /trivia — pull a random file from the vault\n"
+        "• /file — pull a random file from the vault\n"
         "• /ask [question] — submit your own inquiry to the system\n"
         "• /reveal — declassify the answer _(timer must expire first)_\n"
         "• /score — your current standing\n"
@@ -481,7 +466,7 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Identify the redacted words in each classified file.\n"
         "The redacted words are always central to the answer — no decoys.\n\n"
         "🧠 *COMMANDS:*\n"
-        "• /trivia — random classified file\n"
+        "• /file — open a random classified file\n"
         "• /ask — submit your own question to the system\n"
         "• /reveal — unlock the file _(only after timer expires)_\n"
         "• /score — your dossier\n"
@@ -523,10 +508,11 @@ async def score_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = get_leaderboard()
     if not rows:
-        await update.message.reply_text("📭 The vault has no records yet. The files are clean — for now.")
+        await update.message.reply_text(
+            "📭 The vault has no records yet. The files are clean — for now."
+        )
         return
 
-    # Use HTML to avoid Markdown parse failures from usernames with _ . * etc.
     import html
     lines = ["🏛 <b>THE PEPSTEIN FILES — TOP OPERATIVES</b>\n"]
     medals = ["🥇", "🥈", "🥉"]
@@ -540,9 +526,9 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # --------------------
-# TRIVIA
+# FILE (formerly /trivia)
 # --------------------
-async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def file_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     game = get_active_game(chat_id)
@@ -559,10 +545,12 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🗂 pulling a file from the vault...")
 
     result = generate_trivia()
-    # redactor returns (question, answer, keywords, difficulty)
     question, answer, keywords = result[0], result[1], result[2]
     preset_diff = result[3] if len(result) > 3 else None
-    await _launch_round(update, context, question, answer, keywords, label="CLASSIFIED FILE", preset_difficulty=preset_diff)
+    await _launch_round(
+        update, context, question, answer, keywords,
+        label="CLASSIFIED FILE", preset_difficulty=preset_diff
+    )
 
 
 # --------------------
@@ -593,7 +581,10 @@ async def ask_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 cross-referencing the files...")
 
     answer, keywords = get_answer(question)
-    await _launch_round(update, context, question, answer, keywords, label="SUBMITTED INQUIRY")
+    await _launch_round(
+        update, context, question, answer, keywords,
+        label="SUBMITTED INQUIRY"
+    )
 
 
 # --------------------
@@ -665,7 +656,7 @@ async def qwerty_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
     if ADMIN_ID and user.id != ADMIN_ID:
-        return  # Silent — don't even acknowledge the command exists
+        return
 
     reset_leaderboard()
     await update.message.reply_text("♻️ vault records wiped.")
@@ -698,7 +689,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     add_points(user.id, user.username or user.first_name, points)
 
-    # Case-insensitive comparison — DB round-trip can alter casing
+    # Case-insensitive — DB round-trip can alter casing
     matched_lower = {m.lower() for m in matched}
     remaining = [k for k in game["keywords"] if k.lower() not in matched_lower]
 
@@ -706,7 +697,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_redacted = redact_answer(game["original"], remaining)
         set_active_game(chat_id, game["original"], new_redacted, remaining)
 
-        # Update pinned message — isolated so any crash here never kills the feedback
+        # Update pinned message — isolated so a crash here never kills the feedback
         pinned_id = context.chat_data.get("pinned_game_message")
         if pinned_id:
             try:
@@ -739,7 +730,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="Markdown",
             )
         except Exception:
-            # Fallback without Markdown if formatting fails
             word_list_plain = ", ".join(matched)
             await update.message.reply_text(
                 f"✅ {user.first_name} recovered {word_list_plain} (+{points} pts)\n"
@@ -769,7 +759,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("rules", rules))
-    app.add_handler(CommandHandler("trivia", trivia_command))
+    app.add_handler(CommandHandler("file", file_command))
     app.add_handler(CommandHandler("ask", ask_command))
     app.add_handler(CommandHandler("reveal", reveal_command))
     app.add_handler(CommandHandler("score", score_command))
